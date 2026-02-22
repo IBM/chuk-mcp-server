@@ -11,15 +11,18 @@ from chuk_mcp_server.context import (
     RequestContext,
     clear_all,
     clear_metadata,
+    create_message,
     get_current_context,
     get_metadata,
     get_progress_token,
+    get_sampling_fn,
     get_session_id,
     get_user_id,
     require_session_id,
     require_user_id,
     set_metadata,
     set_progress_token,
+    set_sampling_fn,
     set_session_id,
     set_user_id,
     update_metadata,
@@ -215,6 +218,9 @@ class TestGetCurrentContext:
             "user_id": None,
             "progress_token": None,
             "metadata": {},
+            "sampling_available": False,
+            "elicitation_available": False,
+            "roots_available": False,
         }
 
     def test_get_current_context_all_set(self):
@@ -230,6 +236,9 @@ class TestGetCurrentContext:
             "user_id": "user456",
             "progress_token": 42,
             "metadata": {"key": "value"},
+            "sampling_available": False,
+            "elicitation_available": False,
+            "roots_available": False,
         }
 
     def test_get_current_context_returns_copy_of_metadata(self):
@@ -398,6 +407,84 @@ class TestConvenienceAliases:
         clear_all()
         with pytest.raises(PermissionError):
             get_current_user_id()
+
+
+class TestSamplingContext:
+    """Test sampling context management."""
+
+    def test_get_sampling_fn_default(self):
+        """get_sampling_fn returns None by default."""
+        assert get_sampling_fn() is None
+
+    def test_set_and_get_sampling_fn(self):
+        """set_sampling_fn and get_sampling_fn round-trip."""
+
+        async def mock_fn(**kwargs):
+            return {"role": "assistant", "content": {"type": "text", "text": "ok"}}
+
+        set_sampling_fn(mock_fn)
+        assert get_sampling_fn() is mock_fn
+
+    def test_set_sampling_fn_none(self):
+        """Setting sampling fn to None clears it."""
+
+        async def mock_fn(**kwargs):
+            return {}
+
+        set_sampling_fn(mock_fn)
+        set_sampling_fn(None)
+        assert get_sampling_fn() is None
+
+    @pytest.mark.asyncio
+    async def test_create_message_raises_when_no_fn(self):
+        """create_message raises RuntimeError when no sampling fn set."""
+        with pytest.raises(RuntimeError, match="MCP sampling is not available"):
+            await create_message(messages=[{"role": "user", "content": {"type": "text", "text": "hello"}}])
+
+    @pytest.mark.asyncio
+    async def test_create_message_delegates_to_fn(self):
+        """create_message delegates to the set sampling fn."""
+        captured_kwargs = {}
+
+        async def mock_fn(**kwargs):
+            captured_kwargs.update(kwargs)
+            return {
+                "role": "assistant",
+                "content": {"type": "text", "text": "response"},
+                "model": "test-model",
+            }
+
+        set_sampling_fn(mock_fn)
+        result = await create_message(
+            messages=[{"role": "user", "content": {"type": "text", "text": "hello"}}],
+            max_tokens=500,
+            system_prompt="You are helpful.",
+        )
+        assert result["model"] == "test-model"
+        assert captured_kwargs["max_tokens"] == 500
+        assert captured_kwargs["system_prompt"] == "You are helpful."
+
+    def test_clear_all_resets_sampling_fn(self):
+        """clear_all() resets the sampling fn."""
+
+        async def mock_fn(**kwargs):
+            return {}
+
+        set_sampling_fn(mock_fn)
+        clear_all()
+        assert get_sampling_fn() is None
+
+    def test_get_current_context_includes_sampling(self):
+        """get_current_context includes sampling_available."""
+        ctx = get_current_context()
+        assert ctx["sampling_available"] is False
+
+        async def mock_fn(**kwargs):
+            return {}
+
+        set_sampling_fn(mock_fn)
+        ctx = get_current_context()
+        assert ctx["sampling_available"] is True
 
 
 if __name__ == "__main__":

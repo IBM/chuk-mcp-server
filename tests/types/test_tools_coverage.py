@@ -198,7 +198,10 @@ async def test_tool_handler_convert_type_boolean_exception():
     from chuk_mcp_server.types.parameters import ToolParameter
     from chuk_mcp_server.types.tools import ToolHandler
 
-    handler = ToolHandler.from_function(lambda: None)
+    def dummy_fn():
+        return None
+
+    handler = ToolHandler.from_function(dummy_fn)
     param = ToolParameter(name="enabled", type="boolean", required=True)
 
     # Create an object that can't be converted to bool
@@ -239,7 +242,7 @@ async def test_tool_handler_convert_type_array_from_tuple_set():
     from chuk_mcp_server.types.parameters import ToolParameter
     from chuk_mcp_server.types.tools import ToolHandler
 
-    handler = ToolHandler.from_function(lambda: None)
+    handler = ToolHandler.from_function(lambda: None, name="dummy")
     param = ToolParameter(name="items", type="array", required=True)
 
     # Test tuple conversion
@@ -257,7 +260,7 @@ async def test_tool_handler_convert_type_array_invalid_json():
     from chuk_mcp_server.types.parameters import ToolParameter
     from chuk_mcp_server.types.tools import ToolHandler
 
-    handler = ToolHandler.from_function(lambda: None)
+    handler = ToolHandler.from_function(lambda: None, name="dummy")
     param = ToolParameter(name="items", type="array", required=True)
 
     # Test invalid JSON string
@@ -279,7 +282,7 @@ async def test_tool_handler_convert_type_array_invalid_type():
     from chuk_mcp_server.types.parameters import ToolParameter
     from chuk_mcp_server.types.tools import ToolHandler
 
-    handler = ToolHandler.from_function(lambda: None)
+    handler = ToolHandler.from_function(lambda: None, name="dummy")
     param = ToolParameter(name="items", type="array", required=True)
 
     # Test invalid type
@@ -295,7 +298,7 @@ async def test_tool_handler_convert_type_object_invalid_json():
     from chuk_mcp_server.types.parameters import ToolParameter
     from chuk_mcp_server.types.tools import ToolHandler
 
-    handler = ToolHandler.from_function(lambda: None)
+    handler = ToolHandler.from_function(lambda: None, name="dummy")
     param = ToolParameter(name="config", type="object", required=True)
 
     # Test invalid JSON string
@@ -317,7 +320,7 @@ async def test_tool_handler_convert_type_object_invalid_type():
     from chuk_mcp_server.types.parameters import ToolParameter
     from chuk_mcp_server.types.tools import ToolHandler
 
-    handler = ToolHandler.from_function(lambda: None)
+    handler = ToolHandler.from_function(lambda: None, name="dummy")
     param = ToolParameter(name="config", type="object", required=True)
 
     # Test invalid type
@@ -338,7 +341,7 @@ def test_tool_handler_convert_type_enum_invalid():
     from chuk_mcp_server.types.parameters import ToolParameter
     from chuk_mcp_server.types.tools import ToolHandler
 
-    handler = ToolHandler.from_function(lambda: None)
+    handler = ToolHandler.from_function(lambda: None, name="dummy")
 
     # Create a parameter with an unknown type to reach the enum check
     param = ToolParameter(name="level", type="unknown_type", required=True, enum=["low", "medium", "high"])

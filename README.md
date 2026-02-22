@@ -7,7 +7,7 @@ Build production-ready [Model Context Protocol](https://modelcontextprotocol.io)
 [![PyPI](https://img.shields.io/pypi/v/chuk-mcp-server)](https://pypi.org/project/chuk-mcp-server/)
 [![Python](https://img.shields.io/pypi/pyversions/chuk-mcp-server)](https://pypi.org/project/chuk-mcp-server/)
 [![Tests](https://github.com/chrishayuk/chuk-mcp-server/actions/workflows/test.yml/badge.svg)](https://github.com/chrishayuk/chuk-mcp-server/actions)
-[![Coverage](https://img.shields.io/badge/coverage-88%25-brightgreen)](https://github.com/chrishayuk/chuk-mcp-server)
+[![Coverage](https://img.shields.io/badge/coverage-97%25-brightgreen)](https://github.com/chrishayuk/chuk-mcp-server)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 ```python
@@ -80,14 +80,20 @@ Restart Claude Desktop - your tools are now available!
 ## 🚀 Why ChukMCPServer?
 
 - **🏆 World-Class Performance**: 36,000+ requests/second, <3ms overhead
+- **📋 Full MCP 2025-11-25**: Complete conformance with the latest MCP specification
 - **🤖 Claude Desktop Ready**: Zero-config stdio transport
 - **⚡ Zero Configuration**: Smart defaults detect everything automatically
 - **🔐 OAuth 2.1 Built-In**: Full OAuth support with `@requires_auth` decorator
 - **☁️ Cloud Native**: Auto-detects GCP, AWS, Azure, Vercel
 - **🔒 Type Safe**: Automatic schema generation from Python type hints
-- **💬 Prompts Support**: Create reusable prompt templates
-- **🔄 Context Management**: Track sessions and users
-- **📦 Dual Transport**: STDIO (Claude Desktop) + HTTP (Web APIs)
+- **🏷️ Tool Annotations**: `read_only_hint`, `destructive_hint`, `idempotent_hint`, `open_world_hint`
+- **📊 Structured Output**: `output_schema` on tools with typed `structuredContent` responses
+- **🎨 Icons**: Icons on tools, resources, prompts, and server info
+- **📦 Dual Transport**: STDIO + Streamable HTTP, both with bidirectional support
+- **🧩 Full Protocol Surface**: Sampling, elicitation, progress, roots, subscriptions, completions, tasks, cancellation
+- **🛡️ Production Hardened**: Rate limiting, request validation, graceful shutdown, thread safety, health probes
+- **🧪 ToolRunner**: Test tools without transport overhead
+- **📄 OpenAPI**: Auto-generated OpenAPI 3.1.0 spec at `/openapi.json`
 
 ## 📚 Documentation
 
@@ -105,17 +111,24 @@ Restart Claude Desktop - your tools are now available!
 ### Decorators for Everything
 
 ```python
-from chuk_mcp_server import tool, resource, prompt, requires_auth
+from chuk_mcp_server import tool, resource, resource_template, prompt, requires_auth
 
-@tool
-def calculate(x: int, y: int) -> int:
-    """Perform calculations."""
-    return x + y
+@tool(read_only_hint=True, idempotent_hint=True,
+      output_schema={"type": "object", "properties": {"result": {"type": "integer"}}})
+def calculate(x: int, y: int) -> dict:
+    """Perform calculations with structured output."""
+    return {"result": x + y}
 
-@resource("config://settings")
+@resource("config://settings",
+          icons=[{"uri": "https://example.com/gear.svg", "mimeType": "image/svg+xml"}])
 def get_settings() -> dict:
     """Access configuration."""
     return {"theme": "dark", "version": "1.0"}
+
+@resource_template("users://{user_id}/profile")
+def get_user_profile(user_id: str) -> dict:
+    """Parameterized resource template (RFC 6570)."""
+    return {"user_id": user_id, "name": "Example User"}
 
 @prompt
 def code_review(code: str, language: str) -> str:
@@ -135,7 +148,12 @@ async def publish_post(content: str, _external_access_token: str | None = None) 
 ```python
 from chuk_mcp_server import ChukMCPServer
 
-mcp = ChukMCPServer("my-api")
+mcp = ChukMCPServer(
+    name="my-api",
+    description="My production API server",
+    icons=[{"uri": "https://example.com/icon.png", "mimeType": "image/png"}],
+    website_url="https://example.com",
+)
 
 @mcp.tool
 async def process_data(data: str) -> dict:

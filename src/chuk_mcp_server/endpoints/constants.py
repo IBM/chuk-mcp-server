@@ -107,6 +107,11 @@ MCP_PROTOCOL_VERSION = "2025-03-26"
 MCP_PROTOCOL_FULL = "MCP 2025-03-26"
 MCP_TRANSPORT = "HTTP with SSE"
 
+# MCP 2025-11-25 headers
+HEADER_MCP_PROTOCOL_VERSION = "MCP-Protocol-Version"
+HEADER_LAST_EVENT_ID = "Last-Event-ID"
+METHOD_DELETE = "DELETE"
+
 
 # ---------------------------------------------------------------------------
 # SSE event framing

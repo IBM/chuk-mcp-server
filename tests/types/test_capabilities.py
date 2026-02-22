@@ -25,7 +25,7 @@ def test_create_server_capabilities_default():
     assert "resources" in capabilities_dict
     assert capabilities_dict["tools"]["listChanged"] is True
     assert capabilities_dict["resources"]["listChanged"] is True
-    assert capabilities_dict["resources"]["subscribe"] is False
+    assert capabilities_dict["resources"]["subscribe"] is True
 
 
 def test_create_server_capabilities_all_enabled():
@@ -112,7 +112,7 @@ def test_resources_capability_details():
 
     resources_cap = capabilities_dict["resources"]
     assert resources_cap["listChanged"] is True
-    assert resources_cap["subscribe"] is False  # Default value
+    assert resources_cap["subscribe"] is True  # Subscriptions enabled
 
 
 def test_prompts_capability_details():

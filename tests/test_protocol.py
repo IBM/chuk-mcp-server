@@ -6,7 +6,14 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from chuk_mcp_server.protocol import MCPProtocolHandler, SessionManager
-from chuk_mcp_server.types import PromptHandler, ResourceHandler, ServerCapabilities, ServerInfo, ToolHandler
+from chuk_mcp_server.types import (
+    PromptHandler,
+    ResourceHandler,
+    ServerCapabilities,
+    ServerInfo,
+    ToolHandler,
+    create_server_capabilities,
+)
 
 
 class TestSessionManager:
@@ -468,3 +475,164 @@ class TestMCPProtocolHandler:
             prompts={"listChanged": False},
         )
         return MCPProtocolHandler(server_info, capabilities)
+
+
+class TestSamplingSupport:
+    """Test MCP sampling protocol support."""
+
+    @pytest.fixture
+    def handler_with_sampling(self):
+        """Create protocol handler with send_to_client callback."""
+        handler = MCPProtocolHandler(
+            ServerInfo(name="test-server", version="1.0.0"),
+            create_server_capabilities(tools=True),
+        )
+        return handler
+
+    @pytest.mark.asyncio
+    async def test_initialize_stores_client_capabilities(self, handler_with_sampling):
+        """_handle_initialize stores client capabilities on session."""
+        params = {
+            "clientInfo": {"name": "test-client"},
+            "protocolVersion": "2025-03-26",
+            "capabilities": {"sampling": {}},
+        }
+        response, session_id = await handler_with_sampling._handle_initialize(params, 1)
+        assert session_id is not None
+        session = handler_with_sampling.session_manager.get_session(session_id)
+        assert "client_capabilities" in session
+        assert "sampling" in session["client_capabilities"]
+
+    @pytest.mark.asyncio
+    async def test_initialize_without_sampling_capability(self, handler_with_sampling):
+        """_handle_initialize works when client has no sampling capability."""
+        params = {
+            "clientInfo": {"name": "test-client"},
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+        }
+        response, session_id = await handler_with_sampling._handle_initialize(params, 1)
+        session = handler_with_sampling.session_manager.get_session(session_id)
+        assert "sampling" not in session["client_capabilities"]
+
+    @pytest.mark.asyncio
+    async def test_send_sampling_request_builds_correct_jsonrpc(self, handler_with_sampling):
+        """send_sampling_request builds correct JSON-RPC request."""
+        captured_request = {}
+
+        async def mock_send(request):
+            captured_request.update(request)
+            return {
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "result": {
+                    "role": "assistant",
+                    "content": {"type": "text", "text": "ok"},
+                    "model": "test",
+                },
+            }
+
+        handler_with_sampling._send_to_client = mock_send
+        result = await handler_with_sampling.send_sampling_request(
+            messages=[{"role": "user", "content": {"type": "text", "text": "hello"}}],
+            max_tokens=100,
+            system_prompt="Be helpful.",
+        )
+
+        assert captured_request["method"] == "sampling/createMessage"
+        assert captured_request["params"]["maxTokens"] == 100
+        assert captured_request["params"]["systemPrompt"] == "Be helpful."
+        assert result["model"] == "test"
+
+    @pytest.mark.asyncio
+    async def test_send_sampling_request_raises_without_transport(self, handler_with_sampling):
+        """send_sampling_request raises if no transport callback."""
+        handler_with_sampling._send_to_client = None
+        with pytest.raises(RuntimeError, match="No transport callback"):
+            await handler_with_sampling.send_sampling_request(
+                messages=[{"role": "user", "content": {"type": "text", "text": "hello"}}],
+            )
+
+    @pytest.mark.asyncio
+    async def test_send_sampling_request_handles_error_response(self, handler_with_sampling):
+        """send_sampling_request raises on error response from client."""
+
+        async def mock_send(request):
+            return {
+                "jsonrpc": "2.0",
+                "id": request["id"],
+                "error": {"code": -1, "message": "Denied"},
+            }
+
+        handler_with_sampling._send_to_client = mock_send
+        with pytest.raises(RuntimeError, match="Sampling request failed: Denied"):
+            await handler_with_sampling.send_sampling_request(
+                messages=[{"role": "user", "content": {"type": "text", "text": "hello"}}],
+            )
+
+    @pytest.mark.asyncio
+    async def test_tools_call_sets_sampling_fn_when_supported(self, handler_with_sampling):
+        """_handle_tools_call sets sampling fn in context when client supports sampling."""
+        from chuk_mcp_server.context import clear_all, get_sampling_fn, set_session_id
+
+        # Set up: register a tool that captures whether sampling is available
+        sampling_was_available = {}
+
+        async def my_tool():
+            sampling_was_available["value"] = get_sampling_fn() is not None
+            return "done"
+
+        tool = ToolHandler.from_function(my_tool, name="my_tool")
+        handler_with_sampling.register_tool(tool)
+
+        # Initialize with sampling capability
+        params = {
+            "clientInfo": {"name": "test-client"},
+            "protocolVersion": "2025-03-26",
+            "capabilities": {"sampling": {}},
+        }
+        _, session_id = await handler_with_sampling._handle_initialize(params, 1)
+        set_session_id(session_id)
+
+        # Set up transport
+        async def mock_send(request):
+            return {"jsonrpc": "2.0", "id": request["id"], "result": {}}
+
+        handler_with_sampling._send_to_client = mock_send
+
+        # Call the tool
+        await handler_with_sampling._handle_tools_call({"name": "my_tool", "arguments": {}}, 2)
+
+        assert sampling_was_available["value"] is True
+
+        # Sampling fn should be cleared after tool execution
+        assert get_sampling_fn() is None
+        clear_all()
+
+    @pytest.mark.asyncio
+    async def test_tools_call_no_sampling_when_not_supported(self, handler_with_sampling):
+        """_handle_tools_call doesn't set sampling fn when client doesn't support it."""
+        from chuk_mcp_server.context import clear_all, get_sampling_fn, set_session_id
+
+        sampling_was_available = {}
+
+        async def my_tool():
+            sampling_was_available["value"] = get_sampling_fn() is not None
+            return "done"
+
+        tool = ToolHandler.from_function(my_tool, name="my_tool")
+        handler_with_sampling.register_tool(tool)
+
+        # Initialize WITHOUT sampling capability
+        params = {
+            "clientInfo": {"name": "test-client"},
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+        }
+        _, session_id = await handler_with_sampling._handle_initialize(params, 1)
+        set_session_id(session_id)
+
+        await handler_with_sampling._handle_tools_call({"name": "my_tool", "arguments": {}}, 2)
+
+        assert sampling_was_available["value"] is False
+        clear_all()

@@ -69,7 +69,7 @@ class TestHTTPServer:
         mock_registry.clear_endpoints.assert_called_once()
 
         # Should have registered endpoints
-        assert mock_registry.register_endpoint.call_count == 7  # 7 endpoints
+        assert mock_registry.register_endpoint.call_count == 11  # 11 endpoints
 
     @patch("chuk_mcp_server.http_server.http_endpoint_registry")
     @patch("chuk_mcp_server.http_server.MCPEndpoint")
@@ -98,7 +98,17 @@ class TestHTTPServer:
         for call in mock_registry.register_endpoint.call_args_list:
             registered_paths.append(call[1]["path"])
 
-        expected_paths = ["/ping", "/version", "/health", "/mcp", "/", "/info", "/docs"]
+        expected_paths = [
+            "/ping",
+            "/version",
+            "/health",
+            "/health/ready",
+            "/health/detailed",
+            "/mcp",
+            "/",
+            "/info",
+            "/docs",
+        ]
         for path in expected_paths:
             assert path in registered_paths
 

@@ -44,9 +44,23 @@ class TestMCPEndpoint:
         # Mock session manager
         self.mock_protocol.session_manager = MagicMock()
         self.mock_protocol.session_manager.create_session.return_value = "test-session-123"
+        self.mock_protocol.session_manager.get_session.return_value = None
 
         # Mock handle_request
         self.mock_protocol.handle_request = AsyncMock()
+
+        # Mock SSE event ID methods (MCP 2025-11-25)
+        self._sse_counter = 0
+
+        def _next_sse_event_id(session_id):
+            self._sse_counter += 1
+            return self._sse_counter
+
+        self.mock_protocol.next_sse_event_id = MagicMock(side_effect=_next_sse_event_id)
+        self.mock_protocol.buffer_sse_event = MagicMock()
+
+        # Mock terminate_session
+        self.mock_protocol.terminate_session = MagicMock(return_value=True)
 
         self.endpoint = MCPEndpoint(self.mock_protocol)
 
@@ -63,7 +77,7 @@ class TestMCPEndpoint:
 
         assert response.status_code == 200
         assert response.headers["Access-Control-Allow-Origin"] == "*"
-        assert response.headers["Access-Control-Allow-Methods"] == "GET, POST, OPTIONS"
+        assert response.headers["Access-Control-Allow-Methods"] == "GET, POST, DELETE, OPTIONS"
         assert response.headers["Access-Control-Allow-Headers"] == "*"
         assert "Access-Control-Allow-Credentials" not in response.headers
 
@@ -90,7 +104,7 @@ class TestMCPEndpoint:
     @pytest.mark.asyncio
     async def test_handle_request_method_not_allowed(self):
         """Test handling unsupported HTTP methods."""
-        for method in ["PUT", "DELETE", "PATCH"]:
+        for method in ["PUT", "PATCH"]:
             request = MockRequest(method=method)
 
             response = await self.endpoint.handle_request(request)
@@ -279,11 +293,12 @@ class TestMCPEndpoint:
         async for chunk in self.endpoint._sse_stream_generator(request_data, "test-session", "tools/list"):
             stream_data.append(chunk)
 
-        # Verify SSE format
-        assert len(stream_data) == 3
+        # Verify SSE format: event, id, data, blank line
+        assert len(stream_data) == 4
         assert stream_data[0] == "event: message\r\n"
-        assert stream_data[1] == f"data: {orjson.dumps(mock_response).decode()}\r\n"
-        assert stream_data[2] == "\r\n"
+        assert stream_data[1] == "id: 1\r\n"
+        assert stream_data[2] == f"data: {orjson.dumps(mock_response).decode()}\r\n"
+        assert stream_data[3] == "\r\n"
 
     @pytest.mark.asyncio
     async def test_sse_stream_generator_notification(self):
@@ -310,19 +325,20 @@ class TestMCPEndpoint:
         async for chunk in self.endpoint._sse_stream_generator(request_data, "test-session", "tools/list"):
             stream_data.append(chunk)
 
-        # Verify error event format
-        assert len(stream_data) == 3
+        # Verify error event format: event, id, data, blank line
+        assert len(stream_data) == 4
         assert stream_data[0] == "event: error\r\n"
+        assert stream_data[1] == "id: 1\r\n"
 
         # Parse error data
-        error_data = stream_data[1].replace("data: ", "").replace("\r\n", "")
+        error_data = stream_data[2].replace("data: ", "").replace("\r\n", "")
         error_response = orjson.loads(error_data)
         assert error_response["jsonrpc"] == "2.0"
         assert error_response["id"] == "test-id"
         assert error_response["error"]["code"] == -32603
         assert "Test SSE error" in error_response["error"]["message"]
 
-        assert stream_data[2] == "\r\n"
+        assert stream_data[3] == "\r\n"
 
     def test_cors_response(self):
         """Test CORS response generation."""
@@ -331,7 +347,7 @@ class TestMCPEndpoint:
         assert response.status_code == 200
         assert response.body == b""
         assert response.headers["Access-Control-Allow-Origin"] == "*"
-        assert response.headers["Access-Control-Allow-Methods"] == "GET, POST, OPTIONS"
+        assert response.headers["Access-Control-Allow-Methods"] == "GET, POST, DELETE, OPTIONS"
         assert response.headers["Access-Control-Allow-Headers"] == "*"
         assert "Access-Control-Allow-Credentials" not in response.headers
 
@@ -441,3 +457,73 @@ class TestMCPEndpoint:
 
             # Verify session creation logging
             mock_logger.info.assert_called_with("Created SSE session: test-ses...")
+
+    # ================================================================
+    # DELETE endpoint tests (MCP 2025-11-25)
+    # ================================================================
+
+    @pytest.mark.asyncio
+    async def test_handle_delete_success(self):
+        """Test successful session termination via DELETE."""
+        request = MockRequest(method="DELETE", headers={"mcp-session-id": "test-session-123"})
+
+        response = await self.endpoint.handle_request(request)
+
+        assert response.status_code == 200
+        assert "Access-Control-Allow-Origin" in response.headers
+        assert "MCP-Protocol-Version" in response.headers
+        self.mock_protocol.terminate_session.assert_called_once_with("test-session-123")
+
+    @pytest.mark.asyncio
+    async def test_handle_delete_missing_session_id(self):
+        """Test DELETE without session ID returns error."""
+        request = MockRequest(method="DELETE", headers={})
+
+        response = await self.endpoint.handle_request(request)
+
+        assert response.status_code == 400
+        body = orjson.loads(response.body)
+        assert body["error"]["code"] == -32600
+        assert "Missing session ID" in body["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_handle_delete_unknown_session(self):
+        """Test DELETE with unknown session ID returns error."""
+        self.mock_protocol.terminate_session.return_value = False
+        request = MockRequest(method="DELETE", headers={"mcp-session-id": "unknown-session"})
+
+        response = await self.endpoint.handle_request(request)
+
+        assert response.status_code == 400
+        body = orjson.loads(response.body)
+        assert "Unknown session" in body["error"]["message"]
+
+    # ================================================================
+    # MCP-Protocol-Version header tests (MCP 2025-11-25)
+    # ================================================================
+
+    @pytest.mark.asyncio
+    async def test_json_response_includes_protocol_version_header(self):
+        """Test that JSON responses include MCP-Protocol-Version header."""
+        request_data = {"jsonrpc": "2.0", "id": "test-id", "method": "tools/list", "params": {}}
+        request = MockRequest(
+            method="POST",
+            body_data=request_data,
+            headers={"mcp-session-id": "test-session", "accept": "application/json"},
+        )
+        mock_response = {"jsonrpc": "2.0", "id": "test-id", "result": {"tools": []}}
+        self.mock_protocol.handle_request.return_value = (mock_response, None)
+
+        response = await self.endpoint.handle_request(request)
+
+        assert "MCP-Protocol-Version" in response.headers
+
+    def test_sse_headers_include_protocol_version(self):
+        """Test that SSE headers include MCP-Protocol-Version."""
+        headers = self.endpoint._sse_headers("test-session")
+        assert "MCP-Protocol-Version" in headers
+
+    def test_error_response_includes_protocol_version(self):
+        """Test that error responses include MCP-Protocol-Version header."""
+        response = self.endpoint._error_response("test-id", -32600, "Bad request")
+        assert "MCP-Protocol-Version" in response.headers

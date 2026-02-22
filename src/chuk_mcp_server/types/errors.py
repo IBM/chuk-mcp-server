@@ -42,4 +42,28 @@ class ToolExecutionError(MCPError):  # type: ignore[misc]
         super().__init__(message, code=-32603, data=data)
 
 
-__all__ = ["ParameterValidationError", "ToolExecutionError"]
+class URLElicitationRequiredError(Exception):
+    """Raised by a tool to indicate the user must visit an external URL.
+
+    MCP 2025-11-25 URL mode elicitation. When raised, the protocol handler
+    returns JSON-RPC error -32042 with the URL in the error data.
+
+    Args:
+        url: The URL the user must visit.
+        description: Optional human-readable description of what the URL is for.
+        mime_type: Optional MIME type hint for the URL content.
+    """
+
+    def __init__(
+        self,
+        url: str,
+        description: str | None = None,
+        mime_type: str | None = None,
+    ):
+        self.url = url
+        self.description = description
+        self.mime_type = mime_type
+        super().__init__(f"URL elicitation required: {url}")
+
+
+__all__ = ["ParameterValidationError", "ToolExecutionError", "URLElicitationRequiredError"]

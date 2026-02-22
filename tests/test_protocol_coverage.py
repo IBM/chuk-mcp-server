@@ -60,8 +60,7 @@ class TestHandleRequestErrors:
         assert response["id"] == 1
         assert "error" in response
         assert response["error"]["code"] == -32603
-        assert "Internal error" in response["error"]["message"]
-        assert "Test exception" in response["error"]["message"]
+        assert response["error"]["message"] == "Internal server error"
         assert session_id is None
 
 

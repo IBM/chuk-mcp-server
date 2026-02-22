@@ -721,6 +721,8 @@ Environment Variables:
     http_parser.add_argument("--host", default=None, help="Host to bind to (default: auto-detect)")
     http_parser.add_argument("--port", type=int, default=None, help="Port to bind to (default: auto-detect)")
     http_parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    http_parser.add_argument("--reload", action="store_true", help="Enable hot reload (auto-restart on file changes)")
+    http_parser.add_argument("--inspect", action="store_true", help="Open MCP Inspector in browser after starting")
     http_parser.add_argument(
         "--log-level",
         default="warning",
@@ -775,6 +777,8 @@ Environment Variables:
             debug=args.debug,
             stdio=False,
             log_level=getattr(args, "log_level", "warning"),
+            reload=getattr(args, "reload", False),
+            inspect=getattr(args, "inspect", False),
         )
 
     else:  # auto mode

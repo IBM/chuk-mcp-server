@@ -91,6 +91,20 @@ Smart configuration, logging, and transport options.
 
 **Best for:** Production configuration, debugging, deployment
 
+### 🔌 Protocol Features
+
+Demonstrations of MCP protocol capabilities.
+
+| Example | Description | Key Features |
+|---------|-------------|--------------|
+| **[protocol_features_demo.py](protocol_features_demo.py)** | Protocol features demo | Completions, subscriptions, elicitation, progress, roots |
+| **[tool_features_example.py](tool_features_example.py)** | Tool annotations, structured output, icons, resource templates | Phase 3 & 4 decorator features |
+| **[context_features_example.py](context_features_example.py)** | Log notifications, progress, resource links, content annotations | Phase 3 context API features |
+| **[advanced_protocol_example.py](advanced_protocol_example.py)** | Sampling with tools, URL elicitation, tasks system | Phase 4 protocol features |
+| **[demo_logging_setlevel.py](demo_logging_setlevel.py)** | Dynamic log level changes | MCP logging/setLevel protocol |
+
+**Best for:** Understanding MCP protocol, building advanced integrations
+
 ### 🎯 Advanced
 
 Advanced patterns and architectures.
@@ -193,6 +207,15 @@ if __name__ == "__main__":
 
 **By Feature:**
 - **Decorators:** `zero_config_example.py`, `prompt_example.py`
+- **Tool Annotations:** `tool_features_example.py`
+- **Structured Output:** `tool_features_example.py`
+- **Icons:** `tool_features_example.py`
+- **Resource Templates:** `tool_features_example.py`
+- **Log Notifications:** `context_features_example.py`
+- **Resource Links:** `context_features_example.py`
+- **Sampling + Tools:** `advanced_protocol_example.py`
+- **URL Elicitation:** `advanced_protocol_example.py`
+- **Tasks System:** `advanced_protocol_example.py`
 - **Async/Await:** `async_example.py`, `zero_config_example.py`
 - **Session Management:** `context_session_isolation_example.py`
 - **User Auth:** `context_user_persistence_example.py`
@@ -263,8 +286,8 @@ Have a cool example? Add it!
 
 ## 📊 Example Statistics
 
-- **Total Examples:** 26 Python files
-- **Categories:** 7 (Basic, Async, Context, Composition, Proxy, Config, Advanced)
+- **Total Examples:** 29 Python files
+- **Categories:** 8 (Basic, Async, Context, Composition, Proxy, Config, Protocol, Advanced)
 - **Test Coverage:** Examples are tested in CI
 - **Documentation:** All major features have examples
 

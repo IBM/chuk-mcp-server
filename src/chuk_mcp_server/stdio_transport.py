@@ -54,6 +54,53 @@ class StdioTransport:
         self.running = False
         self.session_id: str | None = None
 
+        # Pending server-to-client requests awaiting responses
+        self._pending_requests: dict[str, asyncio.Future[dict[str, Any]]] = {}
+
+        # Set the transport callback on the protocol handler
+        self.protocol._send_to_client = self._send_and_receive
+
+    async def _send_and_receive(self, request: dict[str, Any]) -> dict[str, Any]:
+        """
+        Send a JSON-RPC request to the client and await the response.
+
+        Used for server-initiated requests like sampling/createMessage.
+        For notifications (no id), sends fire-and-forget and returns immediately.
+
+        Args:
+            request: JSON-RPC request dict
+
+        Returns:
+            JSON-RPC response dict from the client
+        """
+        request_id = request.get(KEY_ID)
+        if request_id is None:
+            # Notification — fire and forget, no response expected
+            await self._send_response(request)
+            return {}
+
+        # Enforce pending request limit
+        from .constants import MAX_PENDING_REQUESTS
+
+        if len(self._pending_requests) >= MAX_PENDING_REQUESTS:
+            raise RuntimeError(f"Too many pending requests ({MAX_PENDING_REQUESTS})")
+
+        # Create a future for this request
+        loop = asyncio.get_event_loop()
+        future: asyncio.Future[dict[str, Any]] = loop.create_future()
+        self._pending_requests[str(request_id)] = future
+
+        try:
+            # Send the request to the client via stdout
+            await self._send_response(request)
+
+            # Wait for the client's response (with timeout)
+            return await asyncio.wait_for(future, timeout=120.0)
+        except TimeoutError:
+            raise RuntimeError(f"Timeout waiting for client response to request {request_id}")
+        finally:
+            self._pending_requests.pop(str(request_id), None)
+
     async def start(self) -> None:
         """Start the stdio transport server."""
         # Don't log in stdio mode to keep output clean
@@ -100,29 +147,55 @@ class StdioTransport:
                     await self._handle_message(line)
 
             except asyncio.CancelledError:
-                # Stdio transport cancelled
                 break
+            except (orjson.JSONDecodeError, ValueError) as e:
+                logger.debug(f"Parse error in stdio listener: {e}")
+                await self._send_error(None, JsonRpcError.PARSE_ERROR, f"Parse error: {str(e)}")
             except Exception as e:
                 logger.debug(f"Error in stdio listener: {e}")
-                await self._send_error(None, JsonRpcError.PARSE_ERROR, f"Parse error: {str(e)}")
+                await self._send_error(None, JsonRpcError.INTERNAL_ERROR, f"Internal error: {str(e)}")
 
     async def _handle_message(self, message: str) -> None:
         """
         Handle a single JSON-RPC message.
 
+        Routes client responses (no method key) to pending server-initiated requests,
+        and client requests (with method key) to the protocol handler.
+
         Args:
             message: Raw JSON-RPC message string
         """
+        # Reject oversized messages
+        from .constants import MAX_REQUEST_BODY_BYTES
+
+        if len(message.encode("utf-8")) > MAX_REQUEST_BODY_BYTES:
+            await self._send_error(
+                None, JsonRpcError.INVALID_REQUEST, f"Message too large (max {MAX_REQUEST_BODY_BYTES} bytes)"
+            )
+            return
+
         try:
             # Parse the JSON-RPC message
             request_data = orjson.loads(message)
 
-            # Extract method and params
+            # Check if this is a response to a server-initiated request
             method = request_data.get(KEY_METHOD)
-            params = request_data.get(KEY_PARAMS, {})
             request_id = request_data.get(KEY_ID)
 
-            # Debug: Received {method}
+            if method is None and request_id is not None:
+                # This is a response (no method key) - route to pending request
+                request_id_str = str(request_id)
+                if request_id_str in self._pending_requests:
+                    future = self._pending_requests[request_id_str]
+                    if not future.done():
+                        future.set_result(request_data)
+                    return
+                # Response for unknown request ID - ignore
+                logger.debug(f"Received response for unknown request ID: {request_id}")
+                return
+
+            # Extract params
+            params = request_data.get(KEY_PARAMS, {})
 
             # Handle initialize specially to create session
             if method == McpMethod.INITIALIZE:
@@ -130,7 +203,6 @@ class StdioTransport:
                 protocol_version = params.get(KEY_PROTOCOL_VERSION, MCP_PROTOCOL_VERSION_2025_03)
                 session_id = self.protocol.session_manager.create_session(client_info, protocol_version)
                 self.session_id = session_id
-                # Created stdio session
 
             # Process through protocol handler
             response, error = await self.protocol.handle_request(request_data, self.session_id)
@@ -186,8 +258,13 @@ class StdioTransport:
 
     async def stop(self) -> None:
         """Stop the stdio transport."""
-        # Stopping stdio transport
         self.running = False
+
+        # Cancel all pending server-to-client requests
+        for req_id, future in self._pending_requests.items():
+            if not future.done():
+                future.cancel()
+        self._pending_requests.clear()
 
         # Close reader if available
         if self.reader:
@@ -260,6 +337,57 @@ class StdioSyncTransport:
         self.protocol = protocol_handler
         self.session_id: str | None = None
 
+        # Set the transport callback on the protocol handler for sampling support
+        self.protocol._send_to_client = self._send_and_receive
+
+    async def _send_and_receive(self, request: dict[str, Any]) -> dict[str, Any]:
+        """
+        Send a JSON-RPC request to the client and await the response.
+
+        Used for server-initiated requests like sampling/createMessage.
+        For notifications (no id), sends fire-and-forget and returns immediately.
+        Reads from stdin in a thread to avoid blocking the event loop.
+
+        Args:
+            request: JSON-RPC request dict
+
+        Returns:
+            JSON-RPC response dict from the client
+        """
+        request_id = request.get(KEY_ID)
+        if request_id is None:
+            # Notification — fire and forget, no response expected
+            self._send_response(request)
+            return {}
+
+        # Send the request to the client via stdout
+        self._send_response(request)
+
+        # Read the response from stdin (in a thread to avoid blocking)
+        try:
+            line = await asyncio.wait_for(
+                asyncio.to_thread(sys.stdin.readline),
+                timeout=120.0,
+            )
+        except TimeoutError:
+            raise RuntimeError(f"Timeout waiting for client response to request {request_id}")
+
+        if not line:
+            raise RuntimeError("Client closed stdin while waiting for sampling response")
+
+        line = line.strip()
+        if not line:
+            raise RuntimeError("Empty response from client")
+
+        response = orjson.loads(line)
+
+        # Verify response ID matches
+        response_id = response.get(KEY_ID)
+        if str(response_id) != str(request_id):
+            raise RuntimeError(f"Response ID mismatch: expected {request_id}, got {response_id}")
+
+        return dict(response)
+
     def run(self) -> None:
         """Run the STDIO transport synchronously."""
         logger.info("🔌 Starting MCP STDIO transport (sync)")
@@ -305,6 +433,13 @@ class StdioSyncTransport:
         Args:
             line: Raw JSON-RPC message string
         """
+        # Reject oversized messages
+        from .constants import MAX_REQUEST_BODY_BYTES
+
+        if len(line.encode("utf-8")) > MAX_REQUEST_BODY_BYTES:
+            self._send_error(JsonRpcError.INVALID_REQUEST, f"Message too large (max {MAX_REQUEST_BODY_BYTES} bytes)")
+            return
+
         try:
             message = orjson.loads(line)
 

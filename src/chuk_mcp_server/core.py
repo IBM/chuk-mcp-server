@@ -14,6 +14,7 @@ from .config import SmartConfig
 from .decorators import (
     clear_global_registry,
     get_global_prompts,
+    get_global_resource_templates,
     get_global_resources,
     get_global_tools,
 )
@@ -34,6 +35,7 @@ from .types import (
     ToolHandler,
     create_server_capabilities,
 )
+from .types.resources import ResourceTemplateHandler
 
 logger = logging.getLogger(__name__)
 
@@ -63,12 +65,15 @@ class ChukMCPServer:
         name: str | None = None,
         version: str = "1.0.0",
         title: str | None = None,
-        description: str | None = None,  # noqa: ARG002
+        description: str | None = None,
+        icons: list[dict[str, Any]] | None = None,
+        website_url: str | None = None,
         capabilities=None,
         tools: bool = True,
         resources: bool = True,
         prompts: bool = False,
         logging: bool = False,
+        completions: bool = False,
         experimental: dict[str, Any] | None = None,
         # Smart defaults (all optional - will use SmartConfig)
         host: str | None = None,
@@ -121,7 +126,12 @@ class ChukMCPServer:
             self.capabilities = capabilities
         else:
             self.capabilities = create_server_capabilities(
-                tools=tools, resources=resources, prompts=prompts, logging=logging, experimental=experimental
+                tools=tools,
+                resources=resources,
+                prompts=prompts,
+                logging=logging,
+                completions=completions,
+                experimental=experimental,
             )
 
         # Store smart defaults for run() - using modular config
@@ -139,8 +149,19 @@ class ChukMCPServer:
         self.smart_containerized = smart_defaults["containerized"]
         self.smart_transport_mode = smart_defaults.get("transport_mode", "http")
 
+        # Build extra server info fields for MCP 2025-11-25
+        extra_server_info: dict[str, Any] = {}
+        if description is not None:
+            extra_server_info["description"] = description
+        if icons is not None:
+            extra_server_info["icons"] = icons
+        if website_url is not None:
+            extra_server_info["websiteUrl"] = website_url
+
         # Create protocol handler with direct chuk_mcp types
-        self.protocol = MCPProtocolHandler(self.server_info, self.capabilities)
+        self.protocol = MCPProtocolHandler(
+            self.server_info, self.capabilities, extra_server_info=extra_server_info or None
+        )
 
         # Register any globally decorated functions
         self._register_global_functions()
@@ -208,6 +229,10 @@ class ChukMCPServer:
             self.protocol.register_prompt(prompt_handler)
             mcp_registry.register_prompt(prompt_handler.name, prompt_handler)
 
+        # Register global resource templates
+        for template_handler in get_global_resource_templates():
+            self.protocol.register_resource_template(template_handler)
+
         # Clear global registry to avoid duplicate registrations
         clear_global_registry()
 
@@ -227,6 +252,10 @@ class ChukMCPServer:
             @mcp.tool(tags=["custom"])
             def advanced_tool(data: dict) -> dict:
                 return {"processed": data}
+
+            @mcp.tool(read_only_hint=True, idempotent_hint=True)
+            def safe_lookup(key: str) -> str:
+                return db[key]
         """
 
         def decorator(func: Callable) -> Callable:
@@ -234,8 +263,23 @@ class ChukMCPServer:
             tool_name = name or func.__name__
             tool_description = description or func.__doc__ or f"Execute {tool_name}"
 
+            # Extract annotation, output_schema, and icons kwargs
+            annotation_kwargs = {}
+            for key in (
+                "read_only_hint",
+                "destructive_hint",
+                "idempotent_hint",
+                "open_world_hint",
+                "output_schema",
+                "icons",
+            ):
+                if key in kwargs:
+                    annotation_kwargs[key] = kwargs.pop(key)
+
             # Create tool handler from function
-            tool_handler = ToolHandler.from_function(func, name=tool_name, description=tool_description)
+            tool_handler = ToolHandler.from_function(
+                func, name=tool_name, description=tool_description, **annotation_kwargs
+            )
 
             # Register in protocol handler (for MCP functionality)
             self.protocol.register_tool(tool_handler)
@@ -283,9 +327,19 @@ class ChukMCPServer:
             resource_description = description or func.__doc__ or f"Resource: {uri}"
             resource_mime_type = mime_type or "application/json"  # Simple default
 
+            # Extract icons kwarg for resource handler
+            handler_kwargs = {}
+            if "icons" in kwargs:
+                handler_kwargs["icons"] = kwargs.pop("icons")
+
             # Create resource handler from function
             resource_handler = ResourceHandler.from_function(
-                uri=uri, func=func, name=resource_name, description=resource_description, mime_type=resource_mime_type
+                uri=uri,
+                func=func,
+                name=resource_name,
+                description=resource_description,
+                mime_type=resource_mime_type,
+                **handler_kwargs,
             )
 
             # Register in protocol handler (for MCP functionality)
@@ -316,6 +370,49 @@ class ChukMCPServer:
 
         return decorator
 
+    def resource_template(
+        self,
+        uri_template: str,
+        name: str | None = None,
+        description: str | None = None,
+        mime_type: str | None = None,
+        **kwargs,
+    ):
+        """
+        Resource template decorator for parameterized resources (RFC 6570).
+
+        Usage:
+            @mcp.resource_template("users://{user_id}/profile")
+            def get_user_profile(user_id: str) -> dict:
+                return {"id": user_id, "name": "Alice"}
+        """
+
+        def decorator(func: Callable) -> Callable:
+            # Extract icons kwarg for template handler
+            handler_kwargs = {}
+            if "icons" in kwargs:
+                handler_kwargs["icons"] = kwargs.pop("icons")
+
+            template_handler = ResourceTemplateHandler.from_function(
+                uri_template=uri_template,
+                func=func,
+                name=name,
+                description=description,
+                mime_type=mime_type,
+                **handler_kwargs,
+            )
+
+            # Register in protocol handler
+            self.protocol.register_resource_template(template_handler)
+
+            # Add metadata to function
+            func._mcp_resource_template = template_handler
+
+            logger.debug(f"Registered resource template: {uri_template}")
+            return func
+
+        return decorator
+
     def prompt(self, name: str | None = None, description: str | None = None, **kwargs):
         """
         Prompt decorator with simple registration.
@@ -335,8 +432,15 @@ class ChukMCPServer:
             prompt_name = name or func.__name__
             prompt_description = description or func.__doc__ or f"Prompt: {prompt_name}"
 
+            # Extract icons kwarg for prompt handler
+            handler_kwargs = {}
+            if "icons" in kwargs:
+                handler_kwargs["icons"] = kwargs.pop("icons")
+
             # Create prompt handler from function
-            prompt_handler = PromptHandler.from_function(func, name=prompt_name, description=prompt_description)
+            prompt_handler = PromptHandler.from_function(
+                func, name=prompt_name, description=prompt_description, **handler_kwargs
+            )
 
             # Register in protocol handler (for MCP functionality)
             self.protocol.register_prompt(prompt_handler)
@@ -684,6 +788,8 @@ class ChukMCPServer:
         stdio: bool | None = None,
         log_level: str = "warning",
         post_register_hook=None,
+        reload: bool = False,
+        inspect: bool = False,
     ):
         """
         Run the MCP server with modular smart defaults.
@@ -695,6 +801,8 @@ class ChukMCPServer:
             stdio: Run in stdio mode instead of HTTP server (auto-detects if None)
             log_level: Logging level for application (debug, info, warning, error, critical)
             post_register_hook: Optional callback to register additional endpoints after default endpoints
+            reload: Enable hot reload (auto-restart on file changes, HTTP mode only)
+            inspect: Open MCP Inspector in browser after starting (HTTP mode only)
         """
         # Set logging level FIRST, before any other operations
         import os
@@ -797,11 +905,35 @@ class ChukMCPServer:
             if self._server is None:
                 self._server = create_server(self.protocol, post_register_hook=post_register_hook)
 
+            # Open MCP Inspector if requested
+            if inspect:
+                import threading
+                import webbrowser
+
+                inspect_url = f"http://{final_host}:{final_port}/docs"
+
+                def _open_browser():
+                    import time
+
+                    time.sleep(1.5)  # Wait for server to start
+                    webbrowser.open(inspect_url)
+
+                threading.Thread(target=_open_browser, daemon=True).start()
+                logger.info(f"Opening MCP Inspector: {inspect_url}")
+
             # Run the server
             try:
-                self._server.run(host=final_host, port=final_port, debug=final_debug, log_level=log_level)
+                self._server.run(
+                    host=final_host,
+                    port=final_port,
+                    debug=final_debug,
+                    log_level=log_level,
+                    reload=reload,
+                )
             except KeyboardInterrupt:
                 logger.info("\n👋 Server shutting down gracefully...")
+                # Gracefully shut down protocol handler (drain in-flight requests)
+                asyncio.run(self.protocol.shutdown())
                 # Stop proxy servers on shutdown
                 if self.proxy_manager:
                     asyncio.run(self._stop_proxy_if_enabled())

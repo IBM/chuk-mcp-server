@@ -149,7 +149,9 @@ class TestMainFunction:
         mock_setup_logging.assert_called_once_with(debug=False, stderr=False)
 
         # Verify server run with HTTP mode
-        mock_server.run.assert_called_once_with(host=None, port=None, debug=False, stdio=False, log_level="warning")
+        mock_server.run.assert_called_once_with(
+            host=None, port=None, debug=False, stdio=False, log_level="warning", reload=False, inspect=False
+        )
 
     @patch("chuk_mcp_server.cli.create_example_server")
     @patch("chuk_mcp_server.cli.setup_logging")
@@ -166,7 +168,9 @@ class TestMainFunction:
         mock_setup_logging.assert_called_once_with(debug=True, stderr=False)
 
         # Verify server run with custom options
-        mock_server.run.assert_called_once_with(host="0.0.0.0", port=9000, debug=True, stdio=False, log_level="warning")
+        mock_server.run.assert_called_once_with(
+            host="0.0.0.0", port=9000, debug=True, stdio=False, log_level="warning", reload=False, inspect=False
+        )
 
     @patch("chuk_mcp_server.cli.create_example_server")
     @patch("chuk_mcp_server.cli.setup_logging")

@@ -304,7 +304,7 @@ class TestStdioTransport:
 
             mock_send_error.assert_called_once()
             error_args = mock_send_error.call_args[0]
-            assert error_args[1] == -32700  # Parse error code
+            assert error_args[1] == -32603  # Internal error code (generic Exception)
 
     @pytest.mark.asyncio
     async def test_handle_message_with_exception(self, stdio_transport, mock_protocol):

@@ -3,6 +3,7 @@
 Top-level constants shared across the chuk_mcp_server package.
 """
 
+import re
 from enum import IntEnum
 
 # ---------------------------------------------------------------------------
@@ -49,6 +50,18 @@ class McpMethod:
     PROMPTS_LIST = "prompts/list"
     PROMPTS_GET = "prompts/get"
     LOGGING_SET_LEVEL = "logging/setLevel"
+    SAMPLING_CREATE_MESSAGE = "sampling/createMessage"
+    ELICITATION_CREATE = "elicitation/create"
+    NOTIFICATIONS_PROGRESS = "notifications/progress"
+    ROOTS_LIST = "roots/list"
+    NOTIFICATIONS_ROOTS_LIST_CHANGED = "notifications/roots/list_changed"
+    RESOURCES_SUBSCRIBE = "resources/subscribe"
+    RESOURCES_UNSUBSCRIBE = "resources/unsubscribe"
+    NOTIFICATIONS_RESOURCES_UPDATED = "notifications/resources/updated"
+    COMPLETION_COMPLETE = "completion/complete"
+    RESOURCES_TEMPLATES_LIST = "resources/templates/list"
+    NOTIFICATIONS_CANCELLED = "notifications/cancelled"
+    NOTIFICATIONS_MESSAGE = "notifications/message"
 
 
 # MCP initialize parameter keys
@@ -119,9 +132,12 @@ ENV_PORT = "PORT"
 # ---------------------------------------------------------------------------
 LOG_DEBUG = "debug"
 LOG_INFO = "info"
+LOG_NOTICE = "notice"
 LOG_WARNING = "warning"
 LOG_ERROR = "error"
 LOG_CRITICAL = "critical"
+LOG_ALERT = "alert"
+LOG_EMERGENCY = "emergency"
 
 
 # ---------------------------------------------------------------------------
@@ -139,3 +155,68 @@ SERVER_NAME = "ChukMCPServer"
 POWERED_BY = "chuk_mcp"
 FRAMEWORK_DESCRIPTION = "ChukMCPServer with chuk_mcp"
 PACKAGE_LOGGER = "chuk_mcp_server"
+
+
+# ---------------------------------------------------------------------------
+# Pagination
+# ---------------------------------------------------------------------------
+KEY_CURSOR = "cursor"
+KEY_NEXT_CURSOR = "nextCursor"
+DEFAULT_PAGE_SIZE = 100
+
+
+# ---------------------------------------------------------------------------
+# Tool annotations keys (MCP 2025-03-26)
+# ---------------------------------------------------------------------------
+KEY_ANNOTATIONS = "annotations"
+KEY_READ_ONLY_HINT = "readOnlyHint"
+KEY_DESTRUCTIVE_HINT = "destructiveHint"
+KEY_IDEMPOTENT_HINT = "idempotentHint"
+KEY_OPEN_WORLD_HINT = "openWorldHint"
+
+
+# ---------------------------------------------------------------------------
+# MCP error codes beyond JSON-RPC standard
+# ---------------------------------------------------------------------------
+MCP_ERROR_RESOURCE_NOT_FOUND = -32002
+MCP_ERROR_URL_ELICITATION_REQUIRED = -32042
+
+
+# ---------------------------------------------------------------------------
+# Tool name validation (MCP 2025-11-25)
+# ---------------------------------------------------------------------------
+TOOL_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\.]{1,128}$")
+
+
+# ---------------------------------------------------------------------------
+# Tasks system (MCP 2025-11-25)
+# ---------------------------------------------------------------------------
+class McpTaskMethod:
+    TASKS_GET = "tasks/get"
+    TASKS_RESULT = "tasks/result"
+    TASKS_LIST = "tasks/list"
+    TASKS_CANCEL = "tasks/cancel"
+    NOTIFICATIONS_TASKS_STATUS = "notifications/tasks/status"
+
+
+# ---------------------------------------------------------------------------
+# MCP protocol version (2025-11-25)
+# ---------------------------------------------------------------------------
+MCP_PROTOCOL_VERSION_2025_11 = "2025-11-25"
+HEADER_MCP_PROTOCOL_VERSION = "MCP-Protocol-Version"
+HEADER_LAST_EVENT_ID = "Last-Event-ID"
+
+
+# ---------------------------------------------------------------------------
+# Request validation limits (Phase 5: Production Hardening)
+# ---------------------------------------------------------------------------
+MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
+MAX_ARGUMENT_KEYS = 100
+MAX_PENDING_REQUESTS = 100
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting (Phase 5: Production Hardening)
+# ---------------------------------------------------------------------------
+DEFAULT_RATE_LIMIT_RPS = 100.0
+DEFAULT_RATE_LIMIT_BURST = 200.0

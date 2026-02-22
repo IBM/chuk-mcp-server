@@ -54,10 +54,15 @@ class PromptHandler:
     parameters: list[ToolParameter]  # Reuse ToolParameter for prompt arguments
     _cached_mcp_format: dict[str, Any] | None = None  # Cache the MCP format dict
     _cached_mcp_bytes: bytes | None = None  # 🚀 Cache orjson-serialized bytes
+    icons: list[dict[str, Any]] | None = None  # MCP icons (2025-11-25)
 
     @classmethod
     def from_function(
-        cls, func: Callable[..., Any], name: str | None = None, description: str | None = None
+        cls,
+        func: Callable[..., Any],
+        name: str | None = None,
+        description: str | None = None,
+        icons: list[dict[str, Any]] | None = None,
     ) -> "PromptHandler":
         """Create PromptHandler from a function with orjson optimization."""
         prompt_name = name or func.__name__
@@ -104,6 +109,7 @@ class PromptHandler:
             parameters=parameters,
             _cached_mcp_format=None,  # Will be computed immediately
             _cached_mcp_bytes=None,  # Will be computed immediately
+            icons=icons,
         )
 
         # Pre-compute and cache both formats during creation for maximum performance
@@ -115,7 +121,11 @@ class PromptHandler:
         """Ensure both dict and orjson formats are cached."""
         if self._cached_mcp_format is None:
             # Cache the expensive schema generation once
-            self._cached_mcp_format = self.mcp_prompt.model_dump(exclude_none=True)
+            fmt = self.mcp_prompt.model_dump(exclude_none=True)
+            # Add icons if present (MCP 2025-11-25)
+            if self.icons:
+                fmt["icons"] = [icon.copy() for icon in self.icons]
+            self._cached_mcp_format = fmt
 
         if self._cached_mcp_bytes is None:
             # Pre-serialize with orjson for maximum speed

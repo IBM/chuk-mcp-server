@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chuk-mcp-server"
-version = "0.17"
+version = "0.17.0"
 description = "A developer-friendly MCP framework powered by chuk_mcp"
 readme = "README.md"
 license = {text = "Apache-2.0"}

@@ -9,7 +9,14 @@ with clean APIs and backward compatibility.
 
 from typing import Any
 
-from .base import LoggingCapability, PromptsCapability, ResourcesCapability, ServerCapabilities, ToolsCapability
+from .base import (
+    CompletionCapability,
+    LoggingCapability,
+    PromptsCapability,
+    ResourcesCapability,
+    ServerCapabilities,
+    ToolsCapability,
+)
 
 
 class _FilteredServerCapabilities(ServerCapabilities):  # type: ignore[misc]
@@ -36,7 +43,7 @@ class _FilteredServerCapabilities(ServerCapabilities):  # type: ignore[misc]
             if key in self._filter_kwargs or (key == "experimental" and self._experimental is not None):
                 # Special handling for empty capability objects
                 # Keep logging and experimental even if empty (they're valid empty capabilities)
-                if isinstance(value, dict) and not value and key not in ("logging", "experimental"):
+                if isinstance(value, dict) and not value and key not in ("logging", "experimental", "completion"):
                     # Skip empty capability objects (except logging and experimental)
                     # This prevents MCP Inspector UI issues
                     continue
@@ -49,6 +56,7 @@ def create_server_capabilities(
     resources: bool = True,
     prompts: bool = False,
     logging: bool = False,
+    completions: bool = False,
     experimental: dict[str, Any] | None = None,
 ) -> ServerCapabilities:
     """Create server capabilities using chuk_mcp types directly."""
@@ -59,13 +67,16 @@ def create_server_capabilities(
         kwargs["tools"] = ToolsCapability(listChanged=True)
 
     if resources:
-        kwargs["resources"] = ResourcesCapability(listChanged=True, subscribe=False)
+        kwargs["resources"] = ResourcesCapability(listChanged=True, subscribe=True)
 
     if prompts:
         kwargs["prompts"] = PromptsCapability(listChanged=True)
 
     if logging:
         kwargs["logging"] = LoggingCapability()
+
+    if completions:
+        kwargs["completion"] = CompletionCapability()
 
     # Handle experimental features
     if experimental is not None:

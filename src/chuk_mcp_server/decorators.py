@@ -5,19 +5,23 @@ Simple decorators for tools and resources
 """
 
 import inspect
+import threading
 from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
 from .types import PromptHandler, ResourceHandler, ToolHandler
+from .types.resources import ResourceTemplateHandler
 
 # ============================================================================
 # Global Registry (for standalone decorators)
 # ============================================================================
 
+_registry_lock = threading.Lock()
 _global_tools: list[ToolHandler] = []
 _global_resources: list[ResourceHandler] = []
 _global_prompts: list[PromptHandler] = []
+_global_resource_templates: list[ResourceTemplateHandler] = []
 
 
 def get_global_tools() -> list[ToolHandler]:
@@ -35,17 +39,28 @@ def get_global_prompts() -> list[PromptHandler]:
     return _global_prompts.copy()
 
 
+def get_global_resource_templates() -> list[ResourceTemplateHandler]:
+    """Get globally registered resource templates."""
+    return _global_resource_templates.copy()
+
+
 def get_global_registry() -> dict[str, list[Any]]:
     """Get the entire global registry."""
-    return {"tools": _global_tools.copy(), "resources": _global_resources.copy(), "prompts": _global_prompts.copy()}
+    return {
+        "tools": _global_tools.copy(),
+        "resources": _global_resources.copy(),
+        "prompts": _global_prompts.copy(),
+        "resource_templates": _global_resource_templates.copy(),
+    }
 
 
 def clear_global_registry() -> None:
     """Clear global registry (useful for testing)."""
-    global _global_tools, _global_resources, _global_prompts
-    _global_tools = []
-    _global_resources = []
-    _global_prompts = []
+    with _registry_lock:
+        _global_tools.clear()
+        _global_resources.clear()
+        _global_prompts.clear()
+        _global_resource_templates.clear()
 
 
 # ============================================================================
@@ -53,7 +68,16 @@ def clear_global_registry() -> None:
 # ============================================================================
 
 
-def tool(name: str | None = None, description: str | None = None) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+def tool(
+    name: str | None = None,
+    description: str | None = None,
+    read_only_hint: bool | None = None,
+    destructive_hint: bool | None = None,
+    idempotent_hint: bool | None = None,
+    open_world_hint: bool | None = None,
+    output_schema: dict[str, Any] | None = None,
+    icons: list[dict[str, Any]] | None = None,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
     Decorator to register a function as an MCP tool.
 
@@ -65,14 +89,29 @@ def tool(name: str | None = None, description: str | None = None) -> Callable[[C
         @tool(name="custom_name", description="Custom description")
         def my_func(x: int, y: int = 10) -> int:
             return x + y
+
+        @tool(read_only_hint=True, idempotent_hint=True)
+        def safe_lookup(key: str) -> str:
+            return db[key]
     """
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         # Create tool from function
-        mcp_tool = ToolHandler.from_function(func, name=name, description=description)
+        mcp_tool = ToolHandler.from_function(
+            func,
+            name=name,
+            description=description,
+            read_only_hint=read_only_hint,
+            destructive_hint=destructive_hint,
+            idempotent_hint=idempotent_hint,
+            open_world_hint=open_world_hint,
+            output_schema=output_schema,
+            icons=icons,
+        )
 
         # Register globally
-        _global_tools.append(mcp_tool)
+        with _registry_lock:
+            _global_tools.append(mcp_tool)
 
         # Add tool metadata to function
         func._mcp_tool = mcp_tool  # type: ignore[attr-defined]
@@ -100,7 +139,11 @@ def tool(name: str | None = None, description: str | None = None) -> Callable[[C
 
 
 def resource(
-    uri: str, name: str | None = None, description: str | None = None, mime_type: str = "text/plain"
+    uri: str,
+    name: str | None = None,
+    description: str | None = None,
+    mime_type: str = "text/plain",
+    icons: list[dict[str, Any]] | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
     Decorator to register a function as an MCP resource.
@@ -118,11 +161,12 @@ def resource(
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         # Create resource from function
         mcp_resource = ResourceHandler.from_function(
-            uri=uri, func=func, name=name, description=description, mime_type=mime_type
+            uri=uri, func=func, name=name, description=description, mime_type=mime_type, icons=icons
         )
 
         # Register globally
-        _global_resources.append(mcp_resource)
+        with _registry_lock:
+            _global_resources.append(mcp_resource)
 
         # Add resource metadata to function
         func._mcp_resource = mcp_resource  # type: ignore[attr-defined]
@@ -142,7 +186,9 @@ def resource(
 
 
 def prompt(
-    name: str | None = None, description: str | None = None
+    name: str | None = None,
+    description: str | None = None,
+    icons: list[dict[str, Any]] | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
     Decorator to register a function as an MCP prompt.
@@ -159,10 +205,11 @@ def prompt(
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         # Create prompt from function
-        mcp_prompt = PromptHandler.from_function(func, name=name, description=description)
+        mcp_prompt = PromptHandler.from_function(func, name=name, description=description, icons=icons)
 
         # Register globally
-        _global_prompts.append(mcp_prompt)
+        with _registry_lock:
+            _global_prompts.append(mcp_prompt)
 
         # Add prompt metadata to function
         func._mcp_prompt = mcp_prompt  # type: ignore[attr-defined]
@@ -182,6 +229,62 @@ def prompt(
     else:
         # @prompt() or @prompt(name="...") usage
         return decorator
+
+
+# ============================================================================
+# Resource Template Decorator
+# ============================================================================
+
+
+def resource_template(
+    uri_template: str,
+    name: str | None = None,
+    description: str | None = None,
+    mime_type: str | None = None,
+    icons: list[dict[str, Any]] | None = None,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """
+    Decorator to register a function as an MCP resource template (RFC 6570).
+
+    Usage:
+        @resource_template("users://{user_id}/profile")
+        def get_user_profile(user_id: str) -> dict:
+            return {"id": user_id, "name": "Alice"}
+
+        @resource_template(
+            "files://{path}",
+            name="File Reader",
+            mime_type="text/plain",
+        )
+        def read_file(path: str) -> str:
+            return open(path).read()
+    """
+
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        # Create resource template from function
+        mcp_template = ResourceTemplateHandler.from_function(
+            uri_template=uri_template,
+            func=func,
+            name=name,
+            description=description,
+            mime_type=mime_type,
+            icons=icons,
+        )
+
+        # Register globally
+        with _registry_lock:
+            _global_resource_templates.append(mcp_template)
+
+        # Add template metadata to function
+        func._mcp_resource_template = mcp_template  # type: ignore[attr-defined]
+
+        @wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 # ============================================================================
