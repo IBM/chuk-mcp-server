@@ -106,6 +106,7 @@ try:
         get_artifact_store,
         get_namespace_vfs,
         has_artifact_store,
+        list_my_namespaces,
         read_blob,
         read_workspace_file,
         set_artifact_store,
@@ -139,6 +140,7 @@ except ImportError:
 
     create_blob_namespace = _artifact_not_available
     create_workspace_namespace = _artifact_not_available
+    list_my_namespaces = _artifact_not_available
     write_blob = _artifact_not_available
     read_blob = _artifact_not_available
     write_workspace_file = _artifact_not_available
@@ -330,8 +332,9 @@ __all__ = [
     "set_artifact_store",  # Set artifact store in context
     "set_global_artifact_store",  # Set global artifact store
     "has_artifact_store",  # Check if artifact store available
-    "create_blob_namespace",  # Create blob namespace
-    "create_workspace_namespace",  # Create workspace namespace
+    "create_blob_namespace",  # Create blob namespace (context-aware)
+    "create_workspace_namespace",  # Create workspace namespace (context-aware)
+    "list_my_namespaces",  # List namespaces scoped to current user/session
     "write_blob",  # Write to blob namespace
     "read_blob",  # Read from blob namespace
     "write_workspace_file",  # Write file to workspace

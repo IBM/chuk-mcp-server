@@ -42,6 +42,7 @@ from chuk_mcp_server.artifacts_context import (
     write_blob,
     write_workspace_file,
 )
+from chuk_mcp_server.artifacts_context import list_my_namespaces  # noqa: F401 (used in new tests)
 
 
 class TestArtifactsNotAvailable:
@@ -610,3 +611,297 @@ class TestGetNamespaceVfs:
 
         assert result is vfs_mock
         store.get_namespace_vfs.assert_called_once_with("ns-x")
+
+
+# ---------------------------------------------------------------------------
+# Context auto-read for create_blob_namespace / create_workspace_namespace
+# ---------------------------------------------------------------------------
+
+
+class TestCreateBlobNamespaceContextRead:
+    """Verify that session_id / user_id are read from request context when omitted."""
+
+    def setup_method(self):
+        # chuk_artifacts is optional — patch it for every test in this class
+        self._fake_mod = _scope_module()
+        self._patcher = patch.dict("sys.modules", {"chuk_artifacts": self._fake_mod})
+        self._patcher.start()
+        clear_artifact_store()
+        from chuk_mcp_server.context import clear_all
+
+        clear_all()
+
+    def teardown_method(self):
+        self._patcher.stop()
+        clear_artifact_store()
+        from chuk_mcp_server.context import clear_all
+
+        clear_all()
+
+    @pytest.mark.asyncio
+    async def test_session_id_read_from_context(self):
+        from chuk_mcp_server.context import set_session_id
+
+        set_session_id("ctx-session-1")
+
+        store = MagicMock()
+        ns_info = MagicMock(name="ns_info")
+        store.create_namespace = AsyncMock(return_value=ns_info)
+        set_artifact_store(store)
+
+        await create_blob_namespace()
+
+        _call_kwargs = store.create_namespace.call_args[1]
+        assert _call_kwargs["session_id"] == "ctx-session-1"
+
+    @pytest.mark.asyncio
+    async def test_user_id_read_from_context(self):
+        from chuk_mcp_server.context import set_user_id
+
+        set_user_id("ctx-alice")
+
+        store = MagicMock()
+        ns_info = MagicMock(name="ns_info")
+        store.create_namespace = AsyncMock(return_value=ns_info)
+        set_artifact_store(store)
+
+        await create_blob_namespace()
+
+        _call_kwargs = store.create_namespace.call_args[1]
+        assert _call_kwargs["user_id"] == "ctx-alice"
+
+    @pytest.mark.asyncio
+    async def test_explicit_session_overrides_context(self):
+        from chuk_mcp_server.context import set_session_id
+
+        set_session_id("ctx-session-ignored")
+
+        store = MagicMock()
+        store.create_namespace = AsyncMock(return_value=MagicMock())
+        set_artifact_store(store)
+
+        await create_blob_namespace(session_id="explicit-session")
+
+        _call_kwargs = store.create_namespace.call_args[1]
+        assert _call_kwargs["session_id"] == "explicit-session"
+
+    @pytest.mark.asyncio
+    async def test_explicit_user_overrides_context(self):
+        from chuk_mcp_server.context import set_user_id
+
+        set_user_id("ctx-user-ignored")
+
+        store = MagicMock()
+        store.create_namespace = AsyncMock(return_value=MagicMock())
+        set_artifact_store(store)
+
+        await create_blob_namespace(user_id="explicit-user")
+
+        _call_kwargs = store.create_namespace.call_args[1]
+        assert _call_kwargs["user_id"] == "explicit-user"
+
+
+class TestCreateWorkspaceNamespaceContextRead:
+    """Verify that session_id / user_id are read from request context when omitted."""
+
+    def setup_method(self):
+        self._fake_mod = _scope_module()
+        self._patcher = patch.dict("sys.modules", {"chuk_artifacts": self._fake_mod})
+        self._patcher.start()
+        clear_artifact_store()
+        from chuk_mcp_server.context import clear_all
+
+        clear_all()
+
+    def teardown_method(self):
+        self._patcher.stop()
+        clear_artifact_store()
+        from chuk_mcp_server.context import clear_all
+
+        clear_all()
+
+    @pytest.mark.asyncio
+    async def test_session_id_read_from_context(self):
+        from chuk_mcp_server.context import set_session_id
+
+        set_session_id("ws-session-1")
+
+        store = MagicMock()
+        store.create_namespace = AsyncMock(return_value=MagicMock())
+        set_artifact_store(store)
+
+        await create_workspace_namespace("my-ws")
+
+        _call_kwargs = store.create_namespace.call_args[1]
+        assert _call_kwargs["session_id"] == "ws-session-1"
+
+    @pytest.mark.asyncio
+    async def test_user_id_read_from_context(self):
+        from chuk_mcp_server.context import set_user_id
+
+        set_user_id("ws-alice")
+
+        store = MagicMock()
+        store.create_namespace = AsyncMock(return_value=MagicMock())
+        set_artifact_store(store)
+
+        await create_workspace_namespace("my-ws")
+
+        _call_kwargs = store.create_namespace.call_args[1]
+        assert _call_kwargs["user_id"] == "ws-alice"
+
+    @pytest.mark.asyncio
+    async def test_explicit_ids_override_context(self):
+        from chuk_mcp_server.context import set_session_id, set_user_id
+
+        set_session_id("ctx-ignored-session")
+        set_user_id("ctx-ignored-user")
+
+        store = MagicMock()
+        store.create_namespace = AsyncMock(return_value=MagicMock())
+        set_artifact_store(store)
+
+        await create_workspace_namespace("proj", session_id="explicit-s", user_id="explicit-u")
+
+        _call_kwargs = store.create_namespace.call_args[1]
+        assert _call_kwargs["session_id"] == "explicit-s"
+        assert _call_kwargs["user_id"] == "explicit-u"
+
+
+# ---------------------------------------------------------------------------
+# list_my_namespaces
+# ---------------------------------------------------------------------------
+
+
+class TestListMyNamespaces:
+    """Tests for the isolation-safe list_my_namespaces helper."""
+
+    def setup_method(self):
+        self._fake_mod = _scope_module()
+        self._patcher = patch.dict("sys.modules", {"chuk_artifacts": self._fake_mod})
+        self._patcher.start()
+        clear_artifact_store()
+        from chuk_mcp_server.context import clear_all
+
+        clear_all()
+
+    def teardown_method(self):
+        self._patcher.stop()
+        clear_artifact_store()
+        from chuk_mcp_server.context import clear_all
+
+        clear_all()
+
+    def _make_store(self, return_value=None):
+        store = MagicMock()
+        store.list_namespaces.return_value = return_value or []
+        set_artifact_store(store)
+        return store
+
+    def test_raises_without_session_or_user(self):
+        """No context at all → RuntimeError to prevent full-bucket listing."""
+        from chuk_mcp_server.artifacts_context import list_my_namespaces
+
+        self._make_store()
+
+        with pytest.raises(RuntimeError, match="list_my_namespaces"):
+            list_my_namespaces()
+
+    def test_lists_by_session_from_context(self):
+        from chuk_mcp_server.artifacts_context import list_my_namespaces
+        from chuk_mcp_server.context import set_session_id
+
+        set_session_id("my-session")
+        store = self._make_store(["ns-a"])
+
+        result = list_my_namespaces()
+
+        assert result == ["ns-a"]
+        store.list_namespaces.assert_called_once_with(session_id="my-session")
+
+    def test_lists_by_user_from_context(self):
+        from chuk_mcp_server.artifacts_context import list_my_namespaces
+        from chuk_mcp_server.context import set_user_id
+
+        set_user_id("alice")
+        store = self._make_store(["ns-b"])
+
+        result = list_my_namespaces()
+
+        assert result == ["ns-b"]
+        store.list_namespaces.assert_called_once_with(user_id="alice")
+
+    def test_lists_by_both_from_context(self):
+        from chuk_mcp_server.artifacts_context import list_my_namespaces
+        from chuk_mcp_server.context import set_session_id, set_user_id
+
+        set_session_id("sess-1")
+        set_user_id("bob")
+        store = self._make_store(["ns-c"])
+
+        result = list_my_namespaces()
+
+        assert result == ["ns-c"]
+        call_kwargs = store.list_namespaces.call_args[1]
+        assert call_kwargs["session_id"] == "sess-1"
+        assert call_kwargs["user_id"] == "bob"
+
+    def test_explicit_ids_override_context(self):
+        from chuk_mcp_server.artifacts_context import list_my_namespaces
+        from chuk_mcp_server.context import set_session_id, set_user_id
+
+        # Context has different values
+        set_session_id("ctx-session")
+        set_user_id("ctx-user")
+        store = self._make_store()
+
+        list_my_namespaces(session_id="override-session", user_id="override-user")
+
+        call_kwargs = store.list_namespaces.call_args[1]
+        assert call_kwargs["session_id"] == "override-session"
+        assert call_kwargs["user_id"] == "override-user"
+
+    def test_explicit_session_only(self):
+        from chuk_mcp_server.artifacts_context import list_my_namespaces
+
+        store = self._make_store()
+
+        list_my_namespaces(session_id="explicit-sess")
+
+        call_kwargs = store.list_namespaces.call_args[1]
+        assert call_kwargs["session_id"] == "explicit-sess"
+        assert "user_id" not in call_kwargs
+
+    def test_explicit_user_only(self):
+        from chuk_mcp_server.artifacts_context import list_my_namespaces
+
+        store = self._make_store()
+
+        list_my_namespaces(user_id="explicit-user")
+
+        call_kwargs = store.list_namespaces.call_args[1]
+        assert call_kwargs["user_id"] == "explicit-user"
+        assert "session_id" not in call_kwargs
+
+    def test_scope_filter_forwarded(self):
+        from chuk_mcp_server.artifacts_context import list_my_namespaces
+        from chuk_mcp_server.context import set_user_id
+
+        set_user_id("carol")
+        scope_mock = MagicMock(name="USER_SCOPE")
+        store = self._make_store()
+
+        list_my_namespaces(scope=scope_mock)
+
+        call_kwargs = store.list_namespaces.call_args[1]
+        assert call_kwargs["scope"] is scope_mock
+        assert call_kwargs["user_id"] == "carol"
+
+    def test_raises_when_only_explicit_none_passed(self):
+        """Passing explicit None should behave same as omitting — raises."""
+        from chuk_mcp_server.artifacts_context import list_my_namespaces
+
+        self._make_store()
+
+        with pytest.raises(RuntimeError, match="list_my_namespaces"):
+            list_my_namespaces(session_id=None, user_id=None)

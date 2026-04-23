@@ -53,9 +53,10 @@ logger = logging.getLogger(__name__)
 # Context variables for artifact/workspace management
 _artifact_store: ContextVar[ArtifactStore | None] = ContextVar("artifact_store", default=None)
 
-# Global singleton store (fallback when context not available)
+# Global singleton store (fallback when context not available).
+# RLock lets the same thread re-enter (e.g. during testing teardown).
 _global_artifact_store: ArtifactStore | None = None
-_global_store_lock = threading.Lock()
+_global_store_lock = threading.RLock()
 
 
 def set_artifact_store(store: ArtifactStore) -> None:
@@ -176,30 +177,42 @@ async def create_blob_namespace(
     """
     Convenience function to create a blob namespace.
 
+    ``session_id`` and ``user_id`` are read from the active request context
+    when not supplied explicitly — so callers inside an MCP tool handler get
+    the right scoping automatically without having to thread identifiers through
+    every call site.  Explicit arguments always take precedence over context.
+
     Args:
         scope: Storage scope (defaults to SESSION)
-        session_id: Session ID (auto-allocated if not provided)
-        user_id: User ID (required for USER scope)
-        **kwargs: Additional parameters for create_namespace
+        session_id: Session ID override; falls back to ``get_session_id()`` from context
+        user_id: User ID override; falls back to ``get_user_id()`` from context
+        **kwargs: Additional parameters forwarded to ``create_namespace``
 
     Returns:
-        NamespaceInfo for created blob namespace
+        NamespaceInfo for the created blob namespace
 
     Examples:
-        >>> # Session-scoped blob
+        >>> # Session-scoped — session_id injected from request context
         >>> ns = await create_blob_namespace()
 
-        >>> # User-scoped blob
-        >>> ns = await create_blob_namespace(
-        ...     scope=StorageScope.USER,
-        ...     user_id="alice"
-        ... )
+        >>> # User-scoped — user_id injected from OAuth context
+        >>> ns = await create_blob_namespace(scope=StorageScope.USER)
+
+        >>> # Explicit override (e.g. admin code acting on behalf of a user)
+        >>> ns = await create_blob_namespace(scope=StorageScope.USER, user_id="alice")
     """
     from chuk_artifacts import NamespaceType
     from chuk_artifacts import StorageScope as Scope
+    from chuk_mcp_server.context import get_session_id, get_user_id
 
     if scope is None:
         scope = Scope.SESSION
+
+    # Fall back to request-context identifiers when not supplied explicitly
+    if session_id is None:
+        session_id = get_session_id()
+    if user_id is None:
+        user_id = get_user_id()
 
     store = get_artifact_store()
     ns: NamespaceInfo = await store.create_namespace(
@@ -223,34 +236,48 @@ async def create_workspace_namespace(
     """
     Convenience function to create a workspace namespace.
 
+    ``session_id`` and ``user_id`` are read from the active request context
+    when not supplied explicitly — so callers inside an MCP tool handler get
+    the right scoping automatically.  Explicit arguments always take precedence.
+
     Args:
         name: Workspace name
         scope: Storage scope (defaults to SESSION)
-        session_id: Session ID (auto-allocated if not provided)
-        user_id: User ID (required for USER scope)
+        session_id: Session ID override; falls back to ``get_session_id()`` from context
+        user_id: User ID override; falls back to ``get_user_id()`` from context
         provider_type: VFS provider (vfs-memory, vfs-filesystem, vfs-s3, vfs-sqlite)
-        **kwargs: Additional parameters for create_namespace
+        **kwargs: Additional parameters forwarded to ``create_namespace``
 
     Returns:
-        NamespaceInfo for created workspace namespace
+        NamespaceInfo for the created workspace namespace
 
     Examples:
-        >>> # Session-scoped workspace
+        >>> # Session-scoped — session_id injected from request context
         >>> ws = await create_workspace_namespace("my-project")
 
-        >>> # User-scoped workspace with filesystem backing
+        >>> # User-scoped — user_id injected from OAuth context
+        >>> ws = await create_workspace_namespace("my-project", scope=StorageScope.USER)
+
+        >>> # Explicit override
         >>> ws = await create_workspace_namespace(
         ...     name="alice-project",
         ...     scope=StorageScope.USER,
         ...     user_id="alice",
-        ...     provider_type="vfs-filesystem"
+        ...     provider_type="vfs-filesystem",
         ... )
     """
     from chuk_artifacts import NamespaceType
     from chuk_artifacts import StorageScope as Scope
+    from chuk_mcp_server.context import get_session_id, get_user_id
 
     if scope is None:
         scope = Scope.SESSION
+
+    # Fall back to request-context identifiers when not supplied explicitly
+    if session_id is None:
+        session_id = get_session_id()
+    if user_id is None:
+        user_id = get_user_id()
 
     store = get_artifact_store()
     ns: NamespaceInfo = await store.create_namespace(
@@ -334,6 +361,85 @@ async def read_workspace_file(namespace_id: str, path: str) -> bytes:
     return cast(bytes, await store.read_namespace(namespace_id, path=path))
 
 
+def list_my_namespaces(
+    scope: StorageScope | None = None,
+    session_id: str | None = None,
+    user_id: str | None = None,
+) -> list[NamespaceInfo]:
+    """
+    List namespaces belonging to the current user or session.
+
+    Unlike calling ``get_artifact_store().list_namespaces()`` directly, this
+    helper automatically pulls ``session_id`` and ``user_id`` from the active
+    request context and **refuses to list without at least one scoping
+    identifier** (unless ``scope=StorageScope.SANDBOX`` is given).  This
+    prevents the common mistake of accidentally returning every namespace in
+    the store when user/session context is absent.
+
+    Args:
+        scope: Optional scope filter.  When ``StorageScope.SANDBOX`` is passed
+            the listing is unfiltered by design (sandbox is shared).
+        session_id: Session ID override; falls back to ``get_session_id()``
+        user_id: User ID override; falls back to ``get_user_id()``
+
+    Returns:
+        List of NamespaceInfo matching the current user / session scope.
+
+    Raises:
+        RuntimeError: When both ``session_id`` and ``user_id`` are ``None``
+            and the scope is not SANDBOX.  Call
+            ``get_artifact_store().list_namespaces()`` directly if you
+            intentionally need an unscoped listing.
+
+    Examples:
+        >>> # List namespaces for the current session (session_id from context)
+        >>> my_ns = list_my_namespaces()
+
+        >>> # List only user-scoped namespaces (user_id from OAuth context)
+        >>> from chuk_artifacts import StorageScope
+        >>> my_ns = list_my_namespaces(scope=StorageScope.USER)
+
+        >>> # Explicit override — admin acting on behalf of a specific user
+        >>> my_ns = list_my_namespaces(user_id="alice")
+    """
+    from chuk_artifacts import StorageScope as Scope
+    from chuk_mcp_server.context import get_session_id, get_user_id
+
+    # Fall back to request-context identifiers when not supplied explicitly
+    if session_id is None:
+        session_id = get_session_id()
+    if user_id is None:
+        user_id = get_user_id()
+
+    store = get_artifact_store()
+
+    # SANDBOX scope is shared by design — listing without user/session is fine
+    try:
+        if scope is not None and scope == Scope.SANDBOX:
+            return store.list_namespaces(scope=scope)
+    except Exception:
+        pass  # scope comparison may fail if Scope is unavailable; fall through
+
+    # Every other scope requires at least one identifier to prevent full-bucket exposure
+    if session_id is None and user_id is None:
+        raise RuntimeError(
+            "list_my_namespaces() requires either a session or user context. "
+            "This prevents accidentally listing all namespaces across all users. "
+            "Use get_artifact_store().list_namespaces() directly if you intentionally "
+            "need an unscoped listing (e.g. for SANDBOX-scope items)."
+        )
+
+    kwargs: dict[str, Any] = {}
+    if scope is not None:
+        kwargs["scope"] = scope
+    if user_id is not None:
+        kwargs["user_id"] = user_id
+    if session_id is not None:
+        kwargs["session_id"] = session_id
+
+    return store.list_namespaces(**kwargs)
+
+
 def get_namespace_vfs(namespace_id: str) -> AsyncVirtualFileSystem:
     """
     Get VFS instance for namespace.
@@ -360,9 +466,12 @@ __all__ = [
     "get_artifact_store",
     "set_global_artifact_store",
     "has_artifact_store",
-    # Convenience functions
+    # Namespace creation (context-aware)
     "create_blob_namespace",
     "create_workspace_namespace",
+    # Namespace listing (context-aware, isolation-safe)
+    "list_my_namespaces",
+    # Data I/O
     "write_blob",
     "read_blob",
     "write_workspace_file",
