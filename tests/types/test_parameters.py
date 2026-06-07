@@ -638,6 +638,34 @@ def test_array_items_type_extraction():
     assert param_bare_list.items_type is None
 
 
+def test_array_of_parameterized_generic_items():
+    """Regression: list[dict[str, float]] must expose array[object], not array[string].
+
+    A parameterized generic item (dict[str, float], list[int]) is not a key in the
+    basic type_map, so the old type_map.get(item_arg, "string") fell through to
+    "string". Clients then sent strings and tools that called .get() on each item
+    crashed with "'str' object has no attribute 'get'".
+    """
+    from chuk_mcp_server.types.parameters import ToolParameter
+
+    # The exact shape used by chuk-mcp-ocean-drift's current_profile parameter.
+    param = ToolParameter.from_annotation("current_profile", list[dict[str, float]])
+    assert param.type == "array"
+    assert param.items_type == "object"
+    assert param.to_json_schema()["items"] == {"type": "object"}
+
+    # Bare dict items resolve the same way.
+    assert ToolParameter.from_annotation("rows", list[dict]).items_type == "object"
+
+    # Nested list items resolve to array.
+    assert ToolParameter.from_annotation("grid", list[list[int]]).items_type == "array"
+
+    # Optional (list[dict[...]] | None) takes the union branch and must also be object.
+    opt = ToolParameter.from_annotation("cp", list[dict[str, float]] | None)
+    assert opt.type == "array"
+    assert opt.items_type == "object"
+
+
 def test_array_json_schema_with_items():
     """Test that array JSON schemas include the items field."""
     from chuk_mcp_server.types.parameters import ToolParameter
@@ -728,16 +756,16 @@ def test_nested_generic_types():
     """Test handling of nested generic types."""
     from chuk_mcp_server.types.parameters import ToolParameter
 
-    # Test List[List[str]] - only extracts first level
+    # Test List[List[str]] - the outer item is itself a list, so items_type is
+    # "array". (We still only extract one level deep: the inner array has no
+    # declared item type, which is acceptable for JSON Schema.)
     param = ToolParameter.from_annotation("nested", list[list[str]])
     assert param.type == "array"
-    # Inner list[str] becomes "string" since we only extract the outer type arg
-    # Note: This is a known limitation - nested generics default to string
-    assert param.items_type == "string"
+    assert param.items_type == "array"
 
     schema = param.to_json_schema()
     assert schema["type"] == "array"
-    assert schema["items"] == {"type": "string"}
+    assert schema["items"] == {"type": "array"}
 
 
 def test_tool_parameter_union_int_float():
