@@ -203,6 +203,7 @@ async def create_blob_namespace(
     """
     from chuk_artifacts import NamespaceType
     from chuk_artifacts import StorageScope as Scope
+
     from chuk_mcp_server.context import get_session_id, get_user_id
 
     if scope is None:
@@ -268,6 +269,7 @@ async def create_workspace_namespace(
     """
     from chuk_artifacts import NamespaceType
     from chuk_artifacts import StorageScope as Scope
+
     from chuk_mcp_server.context import get_session_id, get_user_id
 
     if scope is None:
@@ -403,6 +405,7 @@ def list_my_namespaces(
         >>> my_ns = list_my_namespaces(user_id="alice")
     """
     from chuk_artifacts import StorageScope as Scope
+
     from chuk_mcp_server.context import get_session_id, get_user_id
 
     # Fall back to request-context identifiers when not supplied explicitly
@@ -416,7 +419,7 @@ def list_my_namespaces(
     # SANDBOX scope is shared by design — listing without user/session is fine
     try:
         if scope is not None and scope == Scope.SANDBOX:
-            return store.list_namespaces(scope=scope)
+            return cast("list[Any]", store.list_namespaces(scope=scope))
     except Exception:
         pass  # scope comparison may fail if Scope is unavailable; fall through
 
@@ -437,7 +440,7 @@ def list_my_namespaces(
     if session_id is not None:
         kwargs["session_id"] = session_id
 
-    return store.list_namespaces(**kwargs)
+    return cast("list[Any]", store.list_namespaces(**kwargs))
 
 
 def get_namespace_vfs(namespace_id: str) -> AsyncVirtualFileSystem:

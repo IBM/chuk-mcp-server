@@ -65,6 +65,43 @@ def _is_pydantic_model(type_annotation: Any) -> bool:
         return False
 
 
+# Basic Python type -> JSON Schema type name. Single source of truth shared by
+# ToolParameter.from_annotation and the array-item resolver below.
+_BASIC_TYPE_MAP: dict[Any, str] = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+    list: "array",
+    dict: "object",
+}
+
+
+def _item_type_name(item_arg: Any) -> str:
+    """JSON Schema type name for a list/array item annotation.
+
+    Resolves *parameterized* generics (``dict[str, float]`` -> ``"object"``,
+    ``list[int]`` -> ``"array"``) that a plain ``type_map.get(item_arg)`` lookup
+    misses -- the map only carries the bare ``dict``/``list`` types. Without this,
+    a parameter typed ``list[dict[str, float]]`` silently degraded to
+    ``array[string]``, so clients sent strings and the tool crashed with
+    ``'str' object has no attribute 'get'``.
+    """
+    import typing
+
+    try:
+        if item_arg in _BASIC_TYPE_MAP:
+            return _BASIC_TYPE_MAP[item_arg]
+    except TypeError:  # pragma: no cover - unhashable annotation, fall through
+        pass
+    origin = typing.get_origin(item_arg)
+    if origin is list:
+        return "array"
+    if origin is dict:
+        return "object"
+    return "string"
+
+
 # ============================================================================
 # Tool Parameter with orjson Optimization
 # ============================================================================
@@ -91,15 +128,8 @@ class ToolParameter:
         import typing
         from typing import Union  # Add explicit imports
 
-        # Enhanced type mapping for modern Python
-        type_map = {
-            str: "string",
-            int: "integer",
-            float: "number",
-            bool: "boolean",
-            list: "array",
-            dict: "object",
-        }
+        # Enhanced type mapping for modern Python (shared single source of truth)
+        type_map = _BASIC_TYPE_MAP
 
         param_type = "string"  # default
         enum_values = None
@@ -139,7 +169,7 @@ class ToolParameter:
                                     items_type = "object"
                                     pydantic_items_model = item_arg
                                 else:
-                                    items_type = type_map.get(item_arg, "string")
+                                    items_type = _item_type_name(item_arg)
                         elif non_none_origin in (dict, dict):
                             param_type = "object"
                         else:  # pragma: no cover - defensive fallback
@@ -174,7 +204,7 @@ class ToolParameter:
                         items_type = "object"
                         pydantic_items_model = item_arg
                     else:
-                        items_type = type_map.get(item_arg, "string")
+                        items_type = _item_type_name(item_arg)
             elif origin in (dict, dict):
                 param_type = "object"
             else:
@@ -211,7 +241,7 @@ class ToolParameter:
                                         items_type = "object"
                                         pydantic_items_model = item_arg
                                     else:
-                                        items_type = type_map.get(item_arg, "string")
+                                        items_type = _item_type_name(item_arg)
                             elif non_none_origin in (dict, dict):
                                 param_type = "object"
                             else:
@@ -241,7 +271,7 @@ class ToolParameter:
                         items_type = "object"
                         pydantic_items_model = item_arg
                     else:
-                        items_type = type_map.get(item_arg, "string")
+                        items_type = _item_type_name(item_arg)
             elif origin in (dict, dict):
                 param_type = "object"
             else:

@@ -35,6 +35,7 @@ from chuk_mcp_server.artifacts_context import (
     get_artifact_store,
     get_namespace_vfs,
     has_artifact_store,
+    list_my_namespaces,  # noqa: F401 (used in new tests)
     read_blob,
     read_workspace_file,
     set_artifact_store,
@@ -42,7 +43,6 @@ from chuk_mcp_server.artifacts_context import (
     write_blob,
     write_workspace_file,
 )
-from chuk_mcp_server.artifacts_context import list_my_namespaces  # noqa: F401 (used in new tests)
 
 
 class TestArtifactsNotAvailable:
@@ -800,7 +800,6 @@ class TestListMyNamespaces:
 
     def test_raises_without_session_or_user(self):
         """No context at all → RuntimeError to prevent full-bucket listing."""
-        from chuk_mcp_server.artifacts_context import list_my_namespaces
 
         self._make_store()
 
@@ -808,7 +807,6 @@ class TestListMyNamespaces:
             list_my_namespaces()
 
     def test_lists_by_session_from_context(self):
-        from chuk_mcp_server.artifacts_context import list_my_namespaces
         from chuk_mcp_server.context import set_session_id
 
         set_session_id("my-session")
@@ -820,7 +818,6 @@ class TestListMyNamespaces:
         store.list_namespaces.assert_called_once_with(session_id="my-session")
 
     def test_lists_by_user_from_context(self):
-        from chuk_mcp_server.artifacts_context import list_my_namespaces
         from chuk_mcp_server.context import set_user_id
 
         set_user_id("alice")
@@ -832,7 +829,6 @@ class TestListMyNamespaces:
         store.list_namespaces.assert_called_once_with(user_id="alice")
 
     def test_lists_by_both_from_context(self):
-        from chuk_mcp_server.artifacts_context import list_my_namespaces
         from chuk_mcp_server.context import set_session_id, set_user_id
 
         set_session_id("sess-1")
@@ -847,7 +843,6 @@ class TestListMyNamespaces:
         assert call_kwargs["user_id"] == "bob"
 
     def test_explicit_ids_override_context(self):
-        from chuk_mcp_server.artifacts_context import list_my_namespaces
         from chuk_mcp_server.context import set_session_id, set_user_id
 
         # Context has different values
@@ -862,8 +857,6 @@ class TestListMyNamespaces:
         assert call_kwargs["user_id"] == "override-user"
 
     def test_explicit_session_only(self):
-        from chuk_mcp_server.artifacts_context import list_my_namespaces
-
         store = self._make_store()
 
         list_my_namespaces(session_id="explicit-sess")
@@ -873,8 +866,6 @@ class TestListMyNamespaces:
         assert "user_id" not in call_kwargs
 
     def test_explicit_user_only(self):
-        from chuk_mcp_server.artifacts_context import list_my_namespaces
-
         store = self._make_store()
 
         list_my_namespaces(user_id="explicit-user")
@@ -884,7 +875,6 @@ class TestListMyNamespaces:
         assert "session_id" not in call_kwargs
 
     def test_scope_filter_forwarded(self):
-        from chuk_mcp_server.artifacts_context import list_my_namespaces
         from chuk_mcp_server.context import set_user_id
 
         set_user_id("carol")
@@ -899,7 +889,6 @@ class TestListMyNamespaces:
 
     def test_raises_when_only_explicit_none_passed(self):
         """Passing explicit None should behave same as omitting — raises."""
-        from chuk_mcp_server.artifacts_context import list_my_namespaces
 
         self._make_store()
 
