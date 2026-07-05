@@ -87,8 +87,21 @@ class ToolHandler:
         if filtered:
             annotations = filtered
 
-        # Extract parameters from function signature
+        # Extract parameters from function signature. `inspect.signature` alone
+        # reports the literal source-text string (e.g. `"list[int] | None"`),
+        # not a real type object, for any function defined under `from
+        # __future__ import annotations` (PEP 563) — resolve through
+        # `typing.get_type_hints` first so those still map to their real JSON
+        # Schema type instead of silently degrading to "string" (see the
+        # matching fix + explanation on `extract_parameters_from_function` in
+        # `parameters.py`, which this duplicates).
+        import typing
+
         sig = inspect.signature(func)
+        try:
+            resolved_hints = typing.get_type_hints(func)
+        except Exception:
+            resolved_hints = {}
         parameters: list[ToolParameter] = []
 
         for param_name, param in sig.parameters.items():
@@ -99,9 +112,13 @@ class ToolHandler:
             if param_name == "_external_access_token":
                 continue
 
+            annotation = resolved_hints.get(param_name, param.annotation)
+            if annotation is inspect.Parameter.empty:
+                annotation = str
+
             tool_param = ToolParameter.from_annotation(
                 name=param_name,
-                annotation=param.annotation if param.annotation != inspect.Parameter.empty else str,
+                annotation=annotation,
                 default=param.default,
             )
             parameters.append(tool_param)

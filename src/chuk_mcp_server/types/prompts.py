@@ -70,8 +70,19 @@ class PromptHandler:
         prompt_name = name or func.__name__
         prompt_description = description or func.__doc__ or f"Prompt: {prompt_name}"
 
-        # Extract parameters from function signature (for prompt arguments)
+        # Extract parameters from function signature (for prompt arguments).
+        # Resolve through `typing.get_type_hints` first: `inspect.signature`
+        # alone reports the literal source-text string for any function
+        # defined under `from __future__ import annotations` (PEP 563), which
+        # would otherwise degrade every argument to a "string" schema type
+        # (see the same fix on `ToolHandler.from_function` in `tools.py`).
+        import typing
+
         sig = inspect.signature(func)
+        try:
+            resolved_hints = typing.get_type_hints(func)
+        except Exception:
+            resolved_hints = {}
         parameters = []
         arguments = []
 
@@ -79,9 +90,13 @@ class PromptHandler:
             if param_name == "self":  # Skip self parameter for methods
                 continue
 
+            annotation = resolved_hints.get(param_name, param.annotation)
+            if annotation is inspect.Parameter.empty:
+                annotation = str
+
             tool_param = ToolParameter.from_annotation(
                 name=param_name,
-                annotation=param.annotation if param.annotation != inspect.Parameter.empty else str,
+                annotation=annotation,
                 default=param.default,
             )
             parameters.append(tool_param)
