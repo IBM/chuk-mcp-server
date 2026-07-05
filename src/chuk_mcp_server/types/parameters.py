@@ -502,17 +502,40 @@ def infer_type_from_annotation(annotation: Any) -> str:
 
 
 def extract_parameters_from_function(func: Any) -> list[ToolParameter]:
-    """Extract parameters from a function signature."""
+    """Extract parameters from a function signature.
+
+    Resolves annotations through `typing.get_type_hints` first, not just
+    `inspect.signature`. A function defined under `from __future__ import
+    annotations` (PEP 563) reports its annotations as the literal source text
+    (e.g. the string ``"list[int] | None"``) via `inspect.signature` alone;
+    every downstream `type_map` lookup in `ToolParameter.from_annotation` then
+    misses and silently falls back to ``"string"``, regardless of the real
+    declared type. A tool built from such a function ends up with a JSON
+    Schema of all strings, so a client sending array/int/bool per the actual
+    Python signature gets a runtime `TypeError` instead of a working call.
+    """
+    import typing
+
     sig = inspect.signature(func)
+    try:
+        resolved_hints = typing.get_type_hints(func)
+    except Exception:
+        # Forward refs that can't resolve in this scope, etc. — fall back to
+        # whatever inspect.signature already gave us for each parameter.
+        resolved_hints = {}
     parameters = []
 
     for param_name, param in sig.parameters.items():
         if param_name == "self":  # Skip self parameter for methods
             continue
 
+        annotation = resolved_hints.get(param_name, param.annotation)
+        if annotation is inspect.Parameter.empty:
+            annotation = str
+
         tool_param = ToolParameter.from_annotation(
             name=param_name,
-            annotation=param.annotation if param.annotation != inspect.Parameter.empty else str,
+            annotation=annotation,
             default=param.default,
         )
         parameters.append(tool_param)
