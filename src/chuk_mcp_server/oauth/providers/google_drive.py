@@ -19,10 +19,14 @@ from typing import Any
 import httpx
 
 from ..base_provider import BaseOAuthProvider
+from ..compat import supports_keyword
 from ..constants import (
+    CONFIDENTIAL_AUTH_METHODS,
+    DEFAULT_AUTH_METHOD,
     DEFAULT_TOKEN_EXPIRY,
     ERROR_INSUFFICIENT_SCOPE,
     ERROR_INVALID_CLIENT,
+    ERROR_INVALID_CLIENT_METADATA,
     ERROR_INVALID_GRANT,
     ERROR_INVALID_REDIRECT_URI,
     ERROR_INVALID_TOKEN,
@@ -31,8 +35,10 @@ from ..constants import (
     GOOGLE_USERINFO_URL,
     GRANT_AUTHORIZATION_CODE,
     GRANT_REFRESH_TOKEN,
+    PARAM_TOKEN_ENDPOINT_AUTH_METHOD,
     PROVIDER_GOOGLE_DRIVE,
     RESPONSE_TYPE_CODE,
+    SUPPORTED_AUTH_METHODS,
 )
 from ..models import (
     AuthorizationParams,
@@ -302,12 +308,35 @@ class GoogleDriveOAuthProvider(BaseOAuthProvider):
             "requires_external_authorization": True,
         }
 
+    async def _authenticate_client(self, client_id: str, client_secret: str | None) -> None:
+        """Authenticate a client at the token endpoint.
+
+        Clients that registered with a confidential token_endpoint_auth_method must
+        present their secret; public clients may omit it, but a wrong secret is
+        always rejected.
+
+        Raises:
+            TokenError: If the client cannot be authenticated
+        """
+        authenticate = getattr(self.token_store, "authenticate_client", None)
+        if authenticate is None:
+            # Token store predates authenticate_client; fall back to the check it does have.
+            authenticate = self.token_store.validate_client
+
+        if not await authenticate(client_id, client_secret=client_secret):
+            logger.warning("❌ Client authentication failed at token endpoint")
+            raise TokenError(
+                error=ERROR_INVALID_CLIENT,
+                error_description="Client authentication failed",
+            )
+
     async def exchange_authorization_code(
         self,
         code: str,
         client_id: str,
         redirect_uri: str,
         code_verifier: str | None = None,
+        client_secret: str | None = None,
     ) -> OAuthToken:
         """Exchange authorization code for access token.
 
@@ -316,12 +345,17 @@ class GoogleDriveOAuthProvider(BaseOAuthProvider):
             client_id: MCP client ID
             redirect_uri: Redirect URI (must match)
             code_verifier: PKCE code verifier
+            client_secret: Client secret, required for clients that registered
+                with a confidential token_endpoint_auth_method
 
         Returns:
             OAuth token with access_token and refresh_token
         """
         logger.info("🔄 Exchanging authorization code for access token")
         logger.debug(f"Authorization code (redacted): {code[:8]}...")
+
+        # Authenticate the client before honouring the code (RFC 6749 3.2.1)
+        await self._authenticate_client(client_id, client_secret)
 
         # Validate authorization code
         code_data = await self.token_store.validate_authorization_code(
@@ -363,6 +397,7 @@ class GoogleDriveOAuthProvider(BaseOAuthProvider):
         refresh_token: str,
         client_id: str,
         scope: str | None = None,
+        client_secret: str | None = None,
     ) -> OAuthToken:
         """Refresh access token using refresh token.
 
@@ -370,11 +405,27 @@ class GoogleDriveOAuthProvider(BaseOAuthProvider):
             refresh_token: Refresh token
             client_id: MCP client ID
             scope: Optional scope (must be subset of original)
+            client_secret: Client secret, required for clients that registered
+                with a confidential token_endpoint_auth_method
 
         Returns:
             New OAuth token
         """
-        result = await self.token_store.refresh_access_token(refresh_token)
+        # Authenticate the client before honouring the token (RFC 6749 section 6)
+        await self._authenticate_client(client_id, client_secret)
+
+        # Bind the refresh token to the client it was issued to. Passed only when
+        # the token store understands it, so custom stores keep working.
+        refresh = self.token_store.refresh_access_token
+        if supports_keyword(refresh, "client_id"):
+            result = await refresh(refresh_token, client_id=client_id)
+        else:
+            logger.warning(
+                "Token store %s does not support client-bound refresh; a leaked refresh "
+                "token could be redeemed by another client. Update it to accept client_id.",
+                type(self.token_store).__name__,
+            )
+            result = await refresh(refresh_token)
 
         if not result:
             raise TokenError(
@@ -486,16 +537,44 @@ class GoogleDriveOAuthProvider(BaseOAuthProvider):
                 error_description="At least one redirect URI required",
             )
 
-        credentials = await self.token_store.register_client(
-            client_name=client_name,
-            redirect_uris=redirect_uris,
-        )
+        # RFC 7591: honour the client's declared token endpoint auth method rather
+        # than discarding it. Undeclared clients register as public.
+        auth_method = client_metadata.get(PARAM_TOKEN_ENDPOINT_AUTH_METHOD) or DEFAULT_AUTH_METHOD
+        if auth_method not in SUPPORTED_AUTH_METHODS:
+            raise RegistrationError(
+                error=ERROR_INVALID_CLIENT_METADATA,
+                error_description=(
+                    f"Unsupported token_endpoint_auth_method. Supported: {', '.join(SUPPORTED_AUTH_METHODS)}"
+                ),
+            )
+
+        register = self.token_store.register_client
+        if supports_keyword(register, PARAM_TOKEN_ENDPOINT_AUTH_METHOD):
+            credentials = await register(
+                client_name=client_name,
+                redirect_uris=redirect_uris,
+                token_endpoint_auth_method=auth_method,
+            )
+        else:
+            if auth_method in CONFIDENTIAL_AUTH_METHODS:
+                raise RegistrationError(
+                    error=ERROR_INVALID_CLIENT_METADATA,
+                    error_description=(
+                        "This server's token store cannot register confidential clients; "
+                        "register as a public client and use PKCE"
+                    ),
+                )
+            credentials = await register(
+                client_name=client_name,
+                redirect_uris=redirect_uris,
+            )
 
         return OAuthClientInfo(
             client_id=credentials["client_id"],
             client_secret=credentials["client_secret"],
             client_name=client_name,
             redirect_uris=redirect_uris,
+            token_endpoint_auth_method=credentials.get(PARAM_TOKEN_ENDPOINT_AUTH_METHOD, auth_method),
         )
 
     # ============================================================================

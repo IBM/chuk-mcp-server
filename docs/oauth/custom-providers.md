@@ -141,8 +141,22 @@ class MyServiceProvider(BaseOAuthProvider):
         client_id: str,
         redirect_uri: str,
         code_verifier: str | None = None,
+        client_secret: str | None = None,
     ) -> OAuthToken:
         """Exchange authorization code for access token."""
+        # Authenticate the client FIRST (RFC 6749 §3.2.1). authenticate_client
+        # requires a secret from clients that registered as client_secret_post or
+        # client_secret_basic, and rejects a wrong secret from any client.
+        if not await self.token_store.authenticate_client(
+            client_id,
+            client_secret=client_secret,
+        ):
+            from chuk_mcp_server.oauth.models import TokenError
+            raise TokenError(
+                error="invalid_client",
+                error_description="Client authentication failed",
+            )
+
         # Validate code
         code_data = await self.token_store.validate_authorization_code(
             code=code,
@@ -174,9 +188,25 @@ class MyServiceProvider(BaseOAuthProvider):
         )
 
     async def exchange_refresh_token(
-        self, refresh_token: str, client_id: str, scope: str | None = None
+        self,
+        refresh_token: str,
+        client_id: str,
+        scope: str | None = None,
+        client_secret: str | None = None,
     ) -> OAuthToken:
         """Refresh an access token."""
+        # Authenticate the client, then pass client_id to the store so a leaked
+        # refresh token cannot be redeemed by a different client (RFC 6749 §6).
+        if not await self.token_store.authenticate_client(
+            client_id,
+            client_secret=client_secret,
+        ):
+            from chuk_mcp_server.oauth.models import TokenError
+            raise TokenError(
+                error="invalid_client",
+                error_description="Client authentication failed",
+            )
+
         # Get refresh token data
         token_data = await self.token_store.get_refresh_token_data(
             refresh_token, client_id
@@ -238,18 +268,46 @@ class MyServiceProvider(BaseOAuthProvider):
         self, client_metadata: dict[str, Any]
     ) -> OAuthClientInfo:
         """Register a new MCP client."""
-        client_id, client_secret = await self.token_store.register_client(
+        # Honour the client's RFC 7591 token_endpoint_auth_method declaration.
+        # Dropping it would leave a confidential client's secret unenforceable.
+        auth_method = client_metadata.get("token_endpoint_auth_method", "none")
+
+        credentials = await self.token_store.register_client(
             client_name=client_metadata.get("client_name", "Unknown"),
             redirect_uris=client_metadata.get("redirect_uris", []),
+            token_endpoint_auth_method=auth_method,
         )
 
         return OAuthClientInfo(
-            client_id=client_id,
-            client_secret=client_secret,
+            client_id=credentials["client_id"],
+            client_secret=credentials["client_secret"],
             client_name=client_metadata.get("client_name", "Unknown"),
             redirect_uris=client_metadata.get("redirect_uris", []),
+            token_endpoint_auth_method=auth_method,
         )
 ```
+
+### Client authentication requirements
+
+Anything you build on `BaseOAuthProvider` is an OAuth Authorization Server, so it
+must hold up its end of what the server's RFC 8414 metadata advertises:
+
+- **Authenticate the client at the token endpoint before honouring a grant.** The
+  middleware extracts `client_secret` from either the request body
+  (`client_secret_post`) or an `Authorization: Basic` header
+  (`client_secret_basic`) and passes it to your provider. Check it with
+  `token_store.authenticate_client()`, which requires a secret from clients that
+  registered as confidential and rejects a wrong secret from anyone.
+- **Persist the client's declared `token_endpoint_auth_method`.** A secret you
+  issue but never record a requirement for is a secret you can never enforce.
+- **Bind refresh tokens to their client.** Pass `client_id` to
+  `token_store.refresh_access_token()` so a leaked token is useless to anyone else.
+- **Never let a PKCE challenge go unverified.** If a code carries a
+  `code_challenge`, the token exchange must verify it — RFC 7636 §4.3 says an
+  absent `code_challenge_method` means `plain`, not "skip the check".
+
+Raise `TokenError(error="invalid_client", ...)` when authentication fails; the
+middleware turns that into a `401` with a `WWW-Authenticate: Basic` header.
 
 ## Service OAuth Client
 

@@ -18,7 +18,13 @@ from chuk_mcp_server.oauth.models import (
 
 
 class MockOAuthProvider(BaseOAuthProvider):
-    """Mock OAuth provider for testing."""
+    """Mock OAuth provider for testing.
+
+    Deliberately keeps the pre-client-authentication method signatures so these
+    tests also cover the middleware's backwards-compatibility path for providers
+    written against an earlier release. See TestClientAuthentication for a
+    provider that accepts client_secret.
+    """
 
     def __init__(self):
         self.authorize_called = False
@@ -274,6 +280,7 @@ class TestOAuthMiddleware:
             "redirect_uri": "http://localhost/callback",
         }
         mock_request.form = AsyncMock(return_value=form_data)
+        mock_request.headers = {}
 
         response = await middleware._token_endpoint(mock_request)
 
@@ -304,6 +311,7 @@ class TestOAuthMiddleware:
             "client_id": "test_client",
         }
         mock_request.form = AsyncMock(return_value=form_data)
+        mock_request.headers = {}
 
         response = await middleware._token_endpoint(mock_request)
 
@@ -327,6 +335,7 @@ class TestOAuthMiddleware:
             "grant_type": "unsupported_grant",
         }
         mock_request.form = AsyncMock(return_value=form_data)
+        mock_request.headers = {}
 
         response = await middleware._token_endpoint(mock_request)
 
@@ -355,6 +364,7 @@ class TestOAuthMiddleware:
             # Missing code, client_id, redirect_uri
         }
         mock_request.form = AsyncMock(return_value=form_data)
+        mock_request.headers = {}
 
         response = await middleware._token_endpoint(mock_request)
 
@@ -419,9 +429,10 @@ class TestOAuthMiddleware:
         import json
 
         body = json.loads(response.body)
-        # Middleware wraps all exceptions as invalid_client_metadata with sanitized description
-        assert body["error"] == "invalid_client_metadata"
-        assert body["error_description"] == "Client registration failed"
+        # RegistrationError carries an RFC 7591 error code, which is surfaced as-is
+        # so the client can tell why registration was refused.
+        assert body["error"] == "invalid_redirect_uri"
+        assert body["error_description"] == "Invalid redirect URI"
 
     @pytest.mark.asyncio
     async def test_external_callback_success(self):
@@ -578,6 +589,7 @@ class TestOAuthMiddleware:
             "code_verifier": "test_verifier",
         }
         mock_request.form = AsyncMock(return_value=form_data)
+        mock_request.headers = {}
 
         response = await middleware._token_endpoint(mock_request)
 
@@ -609,6 +621,7 @@ class TestOAuthMiddleware:
             "redirect_uri": "http://localhost/callback",
         }
         mock_request.form = AsyncMock(return_value=form_data)
+        mock_request.headers = {}
 
         response = await middleware._token_endpoint(mock_request)
 
@@ -617,7 +630,9 @@ class TestOAuthMiddleware:
         import json
 
         body = json.loads(response.body)
-        assert body["error"] == "invalid_request"
+        # A TokenError's own code is surfaced; the description stays sanitized.
+        assert body["error"] == "invalid_grant"
+        assert body["error_description"] == "Token exchange failed"
 
     @pytest.mark.asyncio
     async def test_authorize_with_state(self):
@@ -774,6 +789,7 @@ class TestOAuthMiddleware:
             # Missing refresh_token
         }
         mock_request.form = AsyncMock(return_value=form_data)
+        mock_request.headers = {}
 
         response = await middleware._token_endpoint(mock_request)
 
@@ -792,6 +808,7 @@ class TestOAuthMiddleware:
             # Missing client_id
         }
         mock_request.form = AsyncMock(return_value=form_data)
+        mock_request.headers = {}
 
         response = await middleware._token_endpoint(mock_request)
 
@@ -890,6 +907,7 @@ class TestOAuthMiddleware:
         assert isinstance(response, RedirectResponse)
 
         # Call token endpoint through registered function
+        mock_request.headers = {}
         mock_request.form = AsyncMock(
             return_value={
                 "grant_type": "authorization_code",

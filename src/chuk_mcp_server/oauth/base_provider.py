@@ -48,15 +48,23 @@ class BaseOAuthProvider(ABC):
         client_id: str,
         redirect_uri: str,
         code_verifier: str | None = None,
+        client_secret: str | None = None,
     ) -> OAuthToken:
         """
         Exchange authorization code for access token.
+
+        Implementations MUST authenticate the client when it registered with a
+        confidential token_endpoint_auth_method (client_secret_post or
+        client_secret_basic) — see RFC 6749 section 3.2.1. Public clients
+        register as "none" and may exchange without a secret.
 
         Args:
             code: Authorization code
             client_id: Client ID
             redirect_uri: Redirect URI (must match)
             code_verifier: PKCE code verifier
+            client_secret: Client secret presented at the token endpoint, from
+                either the request body or an Authorization: Basic header
 
         Returns:
             OAuth token
@@ -72,14 +80,20 @@ class BaseOAuthProvider(ABC):
         refresh_token: str,
         client_id: str,
         scope: str | None = None,
+        client_secret: str | None = None,
     ) -> OAuthToken:
         """
         Refresh access token using refresh token.
+
+        Implementations MUST authenticate confidential clients (RFC 6749
+        section 6) and MUST reject a refresh token that was issued to a
+        different client than the one presenting it.
 
         Args:
             refresh_token: Refresh token
             client_id: Client ID
             scope: Optional scope (must be subset of original)
+            client_secret: Client secret presented at the token endpoint
 
         Returns:
             New OAuth token
