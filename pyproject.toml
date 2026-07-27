@@ -47,9 +47,11 @@ google_drive = [
     "google-auth-oauthlib>=1.1.0",
     "google-auth-httplib2>=0.1.1",
     "google-api-python-client>=2.100.0",
-    # Transitive via google-auth -> pyasn1-modules. Floor set explicitly for
-    # CVE-2026-59885 and CVE-2026-59886.
+    # Transitive floors pinned explicitly so they survive lock regeneration.
+    # pyasn1 via google-auth -> pyasn1-modules: CVE-2026-59885, CVE-2026-59886.
     "pyasn1>=0.6.4",
+    # httplib2 via google-api-python-client: CVE-2026-59939.
+    "httplib2>=0.32.0",
 ]
 monitoring = [
     "psutil>=7.0.0",
@@ -58,6 +60,8 @@ docs = [
     "mkdocs>=1.5.0",
     "mkdocs-material>=9.4.0",
     "mkdocstrings[python]>=0.24.0",
+    # Transitive via mkdocs-material/mkdocstrings: CVE-2026-61632.
+    "pymdown-extensions>=11.0.0",
 ]
 
 [tool.setuptools]
