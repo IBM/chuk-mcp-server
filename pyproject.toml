@@ -47,6 +47,9 @@ google_drive = [
     "google-auth-oauthlib>=1.1.0",
     "google-auth-httplib2>=0.1.1",
     "google-api-python-client>=2.100.0",
+    # Transitive via google-auth -> pyasn1-modules. Floor set explicitly for
+    # CVE-2026-59885 and CVE-2026-59886.
+    "pyasn1>=0.6.4",
 ]
 monitoring = [
     "psutil>=7.0.0",
