@@ -15,7 +15,8 @@ on:
         default: false
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Must not collide with the group used by the ci.yml workflow this calls.
+  group: publish-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:

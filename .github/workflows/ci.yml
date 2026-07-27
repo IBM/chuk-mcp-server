@@ -8,7 +8,10 @@ on:
   workflow_call:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Literal prefix, not github.workflow: when this workflow is called by
+  # publish.yml, github.workflow resolves to the CALLER's name, so a shared
+  # expression makes caller and callee collide and the run deadlocks.
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 env:
