@@ -7,6 +7,8 @@ Pure Python OAuth models without mcp library dependencies.
 from dataclasses import dataclass
 from typing import Literal
 
+from .constants import DEFAULT_AUTH_METHOD
+
 
 @dataclass
 class AuthorizationParams:
@@ -40,6 +42,7 @@ class OAuthClientInfo:
     client_secret: str
     client_name: str
     redirect_uris: list[str]
+    token_endpoint_auth_method: str = DEFAULT_AUTH_METHOD
 
 
 class OAuthError(Exception):

@@ -14,6 +14,24 @@ AUTH_METHOD_CLIENT_SECRET_POST = "client_secret_post"
 AUTH_METHOD_CLIENT_SECRET_BASIC = "client_secret_basic"
 AUTH_METHOD_NONE = "none"
 
+SUPPORTED_AUTH_METHODS = (
+    AUTH_METHOD_CLIENT_SECRET_POST,
+    AUTH_METHOD_CLIENT_SECRET_BASIC,
+    AUTH_METHOD_NONE,
+)
+
+# Methods that oblige the client to authenticate at the token endpoint.
+CONFIDENTIAL_AUTH_METHODS = (
+    AUTH_METHOD_CLIENT_SECRET_POST,
+    AUTH_METHOD_CLIENT_SECRET_BASIC,
+)
+
+# Default for clients that do not declare token_endpoint_auth_method, and for
+# clients registered before the field was persisted. RFC 7591 defaults to
+# client_secret_basic, but MCP clients are overwhelmingly public + PKCE, and
+# defaulting to confidential would reject every already-registered client.
+DEFAULT_AUTH_METHOD = AUTH_METHOD_NONE
+
 
 # ---------------------------------------------------------------------------
 # Code challenge methods
@@ -44,12 +62,66 @@ PATH_CALLBACK = "/oauth/callback"
 # ---------------------------------------------------------------------------
 PARAM_GRANT_TYPE = "grant_type"
 PARAM_CLIENT_ID = "client_id"
+PARAM_CLIENT_SECRET = "client_secret"
+PARAM_TOKEN_ENDPOINT_AUTH_METHOD = "token_endpoint_auth_method"
 PARAM_REDIRECT_URI = "redirect_uri"
 PARAM_CODE_VERIFIER = "code_verifier"
+PARAM_CODE_CHALLENGE = "code_challenge"
+PARAM_CODE_CHALLENGE_METHOD = "code_challenge_method"
 PARAM_REFRESH_TOKEN = "refresh_token"
 PARAM_CODE = "code"
 PARAM_STATE = "state"
+PARAM_SCOPE = "scope"
 PARAM_RESPONSE_TYPE = "response_type"
+PARAM_CLIENT_NAME = "client_name"
+PARAM_REDIRECT_URIS = "redirect_uris"
+PARAM_ERROR = "error"
+PARAM_ERROR_DESCRIPTION = "error_description"
+
+# Token response fields
+PARAM_ACCESS_TOKEN = "access_token"
+PARAM_TOKEN_TYPE = "token_type"
+PARAM_EXPIRES_IN = "expires_in"
+
+
+# ---------------------------------------------------------------------------
+# HTTP client authentication (RFC 6749 section 2.3.1)
+# ---------------------------------------------------------------------------
+HEADER_AUTHORIZATION = "authorization"
+HEADER_WWW_AUTHENTICATE = "WWW-Authenticate"
+AUTH_SCHEME_BASIC = "basic"
+BASIC_AUTH_REALM = 'Basic realm="oauth"'
+BASIC_CREDENTIALS_SEPARATOR = ":"
+
+
+# ---------------------------------------------------------------------------
+# Redirect URI handling
+# ---------------------------------------------------------------------------
+QUERY_START = "?"
+QUERY_SEPARATOR = "&"
+
+# Schemes a browser executes rather than navigates to. A client must not be able
+# to register one, because the callback page renders the redirect URI as a link.
+DANGEROUS_URI_SCHEMES = frozenset(
+    {
+        "javascript",
+        "data",
+        "vbscript",
+        "file",
+        "blob",
+        "about",
+    }
+)
+
+
+# ---------------------------------------------------------------------------
+# HTTP status codes used by the OAuth endpoints
+# ---------------------------------------------------------------------------
+HTTP_OK = 200
+HTTP_CREATED = 201
+HTTP_BAD_REQUEST = 400
+HTTP_UNAUTHORIZED = 401
+HTTP_INTERNAL_SERVER_ERROR = 500
 
 
 # ---------------------------------------------------------------------------

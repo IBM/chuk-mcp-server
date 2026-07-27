@@ -38,6 +38,8 @@ from .base_token_store import BaseTokenStore
 from .constants import (
     CODE_CHALLENGE_PLAIN,
     CODE_CHALLENGE_S256,
+    CONFIDENTIAL_AUTH_METHODS,
+    DEFAULT_AUTH_METHOD,
     ENV_ACCESS_TOKEN_TTL,
     ENV_AUTH_CODE_TTL,
     ENV_CLIENT_REGISTRATION_TTL,
@@ -52,6 +54,7 @@ from .constants import (
     TTL_PENDING_AUTH,
     TTL_REFRESH_TOKEN,
 )
+from .crypto import secure_compare
 from .token_models import (
     AccessTokenData,
     AuthorizationCodeData,
@@ -178,18 +181,25 @@ class TokenStore(BaseTokenStore):
                 if not code_verifier:
                     return None
 
+                # RFC 7636 section 4.3: an absent code_challenge_method means "plain".
+                # Never fall through without verifying — an unrecognised method must
+                # fail closed rather than silently accept any verifier.
+                challenge_method = code_data.code_challenge_method or CODE_CHALLENGE_PLAIN
+
                 # Verify code challenge
-                if code_data.code_challenge_method == CODE_CHALLENGE_S256:
+                if challenge_method == CODE_CHALLENGE_S256:
                     # PKCE uses base64url encoding, not hex
                     import base64
 
                     verifier_hash = hashlib.sha256(code_verifier.encode()).digest()
                     verifier_challenge = base64.urlsafe_b64encode(verifier_hash).decode().rstrip("=")
-                    if verifier_challenge != code_data.code_challenge:
+                    if not secure_compare(code_data.code_challenge, verifier_challenge):
                         return None
-                elif code_data.code_challenge_method == CODE_CHALLENGE_PLAIN:
-                    if code_verifier != code_data.code_challenge:
+                elif challenge_method == CODE_CHALLENGE_PLAIN:
+                    if not secure_compare(code_data.code_challenge, code_verifier):
                         return None
+                else:
+                    return None
 
             # Code is valid, consume it (one-time use)
             await session.delete(f"{self.sandbox_id}:auth_code:{code}")
@@ -288,12 +298,20 @@ class TokenStore(BaseTokenStore):
             logger.debug(f"✓ Token found: user_id={token_data.user_id}")
             return token_data.to_dict()
 
-    async def refresh_access_token(self, refresh_token: str) -> tuple[str, str] | None:
+    async def refresh_access_token(
+        self,
+        refresh_token: str,
+        client_id: str | None = None,
+    ) -> tuple[str, str] | None:
         """
         Refresh MCP access token using refresh token.
 
         Args:
             refresh_token: Refresh token
+            client_id: Client presenting the token. When supplied it must match the
+                client the refresh token was issued to (RFC 6749 section 6), so a
+                leaked token cannot be redeemed by a different client. Optional only
+                for backwards compatibility with existing callers.
 
         Returns:
             New (access_token, refresh_token) tuple or None if invalid
@@ -304,6 +322,10 @@ class TokenStore(BaseTokenStore):
                 return None
 
             refresh_data = RefreshTokenData.from_dict(orjson.loads(refresh_json))
+
+            # Bind the refresh token to the client it was issued to
+            if client_id is not None and refresh_data.client_id != client_id:
+                return None
 
             # Revoke old access token
             old_access_token = refresh_data.access_token
@@ -424,6 +446,7 @@ class TokenStore(BaseTokenStore):
         self,
         client_name: str,
         redirect_uris: list[str],
+        token_endpoint_auth_method: str = DEFAULT_AUTH_METHOD,
     ) -> dict[str, str]:
         """
         Register a new MCP client.
@@ -431,9 +454,13 @@ class TokenStore(BaseTokenStore):
         Args:
             client_name: Client name
             redirect_uris: List of valid redirect URIs
+            token_endpoint_auth_method: How the client will authenticate at the
+                token endpoint (RFC 7591). Clients declaring client_secret_post or
+                client_secret_basic must present their secret to exchange a code or
+                refresh a token; "none" registers a public client.
 
         Returns:
-            Dict with client_id and client_secret
+            Dict with client_id, client_secret and token_endpoint_auth_method
         """
         client_id = secrets.token_urlsafe(16)
         client_secret = secrets.token_urlsafe(32)
@@ -442,6 +469,7 @@ class TokenStore(BaseTokenStore):
             client_name=client_name,
             client_secret=client_secret,
             redirect_uris=redirect_uris,
+            token_endpoint_auth_method=token_endpoint_auth_method,
         )
 
         # Store with configurable TTL (default: 1 year)
@@ -455,7 +483,25 @@ class TokenStore(BaseTokenStore):
         return {
             "client_id": client_id,
             "client_secret": client_secret,
+            "token_endpoint_auth_method": client_data.token_endpoint_auth_method,
         }
+
+    async def get_client(self, client_id: str) -> ClientData | None:
+        """
+        Load a registered client.
+
+        Args:
+            client_id: Client ID
+
+        Returns:
+            Client data, or None if the client is not registered
+        """
+        async with get_session() as session:
+            client_json = await session.get(f"{self.sandbox_id}:client:{client_id}")
+            if not client_json:
+                return None
+
+            return ClientData.from_dict(orjson.loads(client_json))
 
     async def validate_client(
         self,
@@ -466,6 +512,10 @@ class TokenStore(BaseTokenStore):
         """
         Validate MCP client credentials.
 
+        A supplied secret is always checked, but this method does not require one.
+        Use :meth:`authenticate_client` at the token endpoint, where the client's
+        registered token_endpoint_auth_method decides whether a secret is mandatory.
+
         Args:
             client_id: Client ID
             client_secret: Client secret (for confidential clients)
@@ -474,24 +524,62 @@ class TokenStore(BaseTokenStore):
         Returns:
             True if valid
         """
-        async with get_session() as session:
-            client_json = await session.get(f"{self.sandbox_id}:client:{client_id}")
-            if not client_json:
+        client_data = await self.get_client(client_id)
+        if not client_data:
+            return False
+
+        # Validate secret if provided
+        if client_secret is not None:
+            if not secure_compare(client_data.client_secret, client_secret):
                 return False
 
-            client_data = ClientData.from_dict(orjson.loads(client_json))
+        # Validate redirect URI if provided
+        if redirect_uri is not None:
+            if redirect_uri not in client_data.redirect_uris:
+                return False
 
-            # Validate secret if provided
-            if client_secret is not None:
-                if client_data.client_secret != client_secret:
-                    return False
+        return True
 
-            # Validate redirect URI if provided
-            if redirect_uri is not None:
-                if redirect_uri not in client_data.redirect_uris:
-                    return False
+    async def authenticate_client(
+        self,
+        client_id: str,
+        client_secret: str | None = None,
+        redirect_uri: str | None = None,
+    ) -> bool:
+        """
+        Authenticate a client at the token endpoint (RFC 6749 section 3.2.1).
 
-            return True
+        Unlike :meth:`validate_client`, this enforces the client's registered
+        token_endpoint_auth_method: a client that registered as client_secret_post
+        or client_secret_basic must present a matching secret. Public clients
+        ("none") may omit the secret, but a secret that is supplied and wrong is
+        always rejected.
+
+        Args:
+            client_id: Client ID
+            client_secret: Client secret presented at the token endpoint
+            redirect_uri: Redirect URI to validate
+
+        Returns:
+            True if the client is authenticated
+        """
+        client_data = await self.get_client(client_id)
+        if not client_data:
+            return False
+
+        requires_secret = client_data.token_endpoint_auth_method in CONFIDENTIAL_AUTH_METHODS
+        if requires_secret and not client_secret:
+            return False
+
+        if client_secret is not None:
+            if not secure_compare(client_data.client_secret, client_secret):
+                return False
+
+        if redirect_uri is not None:
+            if redirect_uri not in client_data.redirect_uris:
+                return False
+
+        return True
 
     # ============================================================================
     # Pending Authorization Storage (for OAuth state management)

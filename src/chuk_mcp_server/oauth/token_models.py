@@ -12,6 +12,8 @@ from typing import Any
 
 import orjson
 
+from .constants import DEFAULT_AUTH_METHOD, SUPPORTED_AUTH_METHODS
+
 # ============================================================================
 # Authorization Code Data
 # ============================================================================
@@ -221,6 +223,7 @@ class ClientData:
     client_name: str
     client_secret: str
     redirect_uris: list[str]
+    token_endpoint_auth_method: str = DEFAULT_AUTH_METHOD
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
 
     def __post_init__(self) -> None:
@@ -228,6 +231,13 @@ class ClientData:
         # Validate client_name is not empty
         if not self.client_name or not self.client_name.strip():
             raise ValueError("client_name must not be empty")
+
+        # Validate the declared token endpoint auth method
+        if self.token_endpoint_auth_method not in SUPPORTED_AUTH_METHODS:
+            raise ValueError(
+                f"token_endpoint_auth_method must be one of {SUPPORTED_AUTH_METHODS}, "
+                f"got {self.token_endpoint_auth_method!r}"
+            )
 
         # Validate redirect_uris
         if not self.redirect_uris:
@@ -243,6 +253,7 @@ class ClientData:
             "client_name": self.client_name,
             "client_secret": self.client_secret,
             "redirect_uris": self.redirect_uris,
+            "token_endpoint_auth_method": self.token_endpoint_auth_method,
             "created_at": self.created_at,
         }
 
@@ -258,6 +269,8 @@ class ClientData:
             client_name=data["client_name"],
             client_secret=data["client_secret"],
             redirect_uris=data["redirect_uris"],
+            # Clients registered before this field existed are treated as public.
+            token_endpoint_auth_method=data.get("token_endpoint_auth_method", DEFAULT_AUTH_METHOD),
             created_at=data.get("created_at", datetime.now().isoformat()),
         )
 

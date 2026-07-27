@@ -48,15 +48,23 @@ class BaseOAuthProvider(ABC):
         client_id: str,
         redirect_uri: str,
         code_verifier: str | None = None,
+        client_secret: str | None = None,
     ) -> OAuthToken:
         """
         Exchange authorization code for access token.
+
+        Implementations MUST authenticate the client when it registered with a
+        confidential token_endpoint_auth_method (client_secret_post or
+        client_secret_basic) — see RFC 6749 section 3.2.1. Public clients
+        register as "none" and may exchange without a secret.
 
         Args:
             code: Authorization code
             client_id: Client ID
             redirect_uri: Redirect URI (must match)
             code_verifier: PKCE code verifier
+            client_secret: Client secret presented at the token endpoint, from
+                either the request body or an Authorization: Basic header
 
         Returns:
             OAuth token
@@ -72,14 +80,20 @@ class BaseOAuthProvider(ABC):
         refresh_token: str,
         client_id: str,
         scope: str | None = None,
+        client_secret: str | None = None,
     ) -> OAuthToken:
         """
         Refresh access token using refresh token.
+
+        Implementations MUST authenticate confidential clients (RFC 6749
+        section 6) and MUST reject a refresh token that was issued to a
+        different client than the one presenting it.
 
         Args:
             refresh_token: Refresh token
             client_id: Client ID
             scope: Optional scope (must be subset of original)
+            client_secret: Client secret presented at the token endpoint
 
         Returns:
             New OAuth token
@@ -126,6 +140,40 @@ class BaseOAuthProvider(ABC):
             RegistrationError: If registration fails
         """
         pass
+
+    async def validate_redirect_uri(
+        self,
+        client_id: str,
+        redirect_uri: str,
+    ) -> bool:
+        """
+        Report whether redirect_uri is registered for client_id.
+
+        The authorization endpoint calls this *before* redirecting an error back
+        to the client. RFC 6749 section 4.1.2.1 forbids redirecting to an
+        unvalidated URI, so a provider that cannot answer must answer False and
+        the error is rendered as a page instead.
+
+        The default delegates to ``self.token_store.validate_client`` when the
+        provider has one, which covers the documented provider pattern. Override
+        it if your provider stores clients elsewhere.
+
+        Args:
+            client_id: Client ID from the authorization request
+            redirect_uri: Redirect URI from the authorization request
+
+        Returns:
+            True only if the pairing is known to be registered
+        """
+        token_store = getattr(self, "token_store", None)
+        if token_store is None:
+            return False
+
+        try:
+            return bool(await token_store.validate_client(client_id, redirect_uri=redirect_uri))
+        except Exception:
+            # An unanswerable check is a failed check.
+            return False
 
     async def revoke_token(
         self,

@@ -178,3 +178,76 @@ class TestBaseTokenStore:
         assert valid is True
         invalid = await store.validate_client("invalid_client")
         assert invalid is False
+
+
+class LegacyTokenStore(BaseTokenStore):
+    """A token store written before authenticate_client existed."""
+
+    def __init__(self):
+        self.validate_calls = []
+
+    async def create_authorization_code(
+        self, user_id, client_id, redirect_uri, scope=None, code_challenge=None, code_challenge_method=None
+    ):  # pragma: no cover - not exercised here
+        return "auth_code"
+
+    async def validate_authorization_code(
+        self, code, client_id, redirect_uri, code_verifier=None
+    ):  # pragma: no cover - not exercised here
+        return None
+
+    async def create_access_token(self, user_id, client_id, scope=None):  # pragma: no cover - not exercised here
+        return ("access", "refresh")
+
+    async def validate_access_token(self, token):  # pragma: no cover - not exercised here
+        return None
+
+    async def refresh_access_token(self, refresh_token):  # pragma: no cover - not exercised here
+        return None
+
+    async def link_external_token(
+        self, user_id, access_token, refresh_token=None, expires_in=None, provider="external"
+    ):  # pragma: no cover - not exercised here
+        pass
+
+    async def get_external_token(self, user_id, provider="external"):  # pragma: no cover - not exercised here
+        return None
+
+    async def update_external_token(
+        self, user_id, access_token, refresh_token=None, expires_in=None, provider="external"
+    ):  # pragma: no cover - not exercised here
+        pass
+
+    async def is_external_token_expired(self, user_id, provider="external"):  # pragma: no cover - not exercised here
+        return False
+
+    async def register_client(self, client_name, redirect_uris):  # pragma: no cover - not exercised here
+        return {"client_id": "client123", "client_secret": "secret123"}
+
+    async def validate_client(self, client_id, client_secret=None, redirect_uri=None):
+        self.validate_calls.append((client_id, client_secret, redirect_uri))
+        return client_secret != "wrong-secret"
+
+
+class TestDefaultAuthenticateClient:
+    """The default authenticate_client keeps pre-existing stores working."""
+
+    @pytest.mark.asyncio
+    async def test_delegates_to_validate_client(self):
+        store = LegacyTokenStore()
+
+        assert await store.authenticate_client("client-a", "s3cret", "http://localhost/cb")
+        assert store.validate_calls == [("client-a", "s3cret", "http://localhost/cb")]
+
+    @pytest.mark.asyncio
+    async def test_passes_through_rejection(self):
+        store = LegacyTokenStore()
+
+        assert not await store.authenticate_client("client-a", "wrong-secret")
+
+    @pytest.mark.asyncio
+    async def test_defaults_to_no_credentials(self):
+        store = LegacyTokenStore()
+
+        assert await store.authenticate_client("client-a")
+        assert store.validate_calls == [("client-a", None, None)]

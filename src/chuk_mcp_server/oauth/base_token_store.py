@@ -7,6 +7,8 @@ Defines the interface that all token store implementations must follow.
 from abc import ABC, abstractmethod
 from typing import Any
 
+from .constants import DEFAULT_AUTH_METHOD
+
 
 class BaseTokenStore(ABC):
     """
@@ -63,8 +65,18 @@ class BaseTokenStore(ABC):
         pass
 
     @abstractmethod
-    async def refresh_access_token(self, refresh_token: str) -> tuple[str, str] | None:
-        """Refresh MCP access token using refresh token."""
+    async def refresh_access_token(
+        self,
+        refresh_token: str,
+        client_id: str | None = None,
+    ) -> tuple[str, str] | None:
+        """
+        Refresh MCP access token using refresh token.
+
+        When ``client_id`` is supplied it must match the client the refresh token
+        was issued to (RFC 6749 section 6). It is optional so that token stores
+        written against an earlier release keep working.
+        """
         pass
 
     # ============================================================================
@@ -114,8 +126,15 @@ class BaseTokenStore(ABC):
         self,
         client_name: str,
         redirect_uris: list[str],
+        token_endpoint_auth_method: str = DEFAULT_AUTH_METHOD,
     ) -> dict[str, str]:
-        """Register a new MCP client."""
+        """
+        Register a new MCP client.
+
+        ``token_endpoint_auth_method`` is the RFC 7591 declaration of how the
+        client will authenticate at the token endpoint. It has a default so that
+        token stores written against an earlier release keep working.
+        """
         pass
 
     @abstractmethod
@@ -125,5 +144,25 @@ class BaseTokenStore(ABC):
         client_secret: str | None = None,
         redirect_uri: str | None = None,
     ) -> bool:
-        """Validate MCP client credentials."""
+        """Validate MCP client credentials, checking the secret only if supplied."""
         pass
+
+    async def authenticate_client(
+        self,
+        client_id: str,
+        client_secret: str | None = None,
+        redirect_uri: str | None = None,
+    ) -> bool:
+        """
+        Authenticate a client at the token endpoint (RFC 6749 section 3.2.1).
+
+        Implementations that persist a client's registered
+        token_endpoint_auth_method should override this to require a secret from
+        confidential clients. The default delegates to :meth:`validate_client`,
+        which preserves the behaviour of stores that do not track the method.
+        """
+        return await self.validate_client(
+            client_id,
+            client_secret=client_secret,
+            redirect_uri=redirect_uri,
+        )
