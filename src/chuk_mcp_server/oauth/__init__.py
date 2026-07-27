@@ -30,6 +30,8 @@ Usage:
 
 from .base_provider import BaseOAuthProvider
 from .base_token_store import BaseTokenStore
+from .compat import supports_keyword
+from .crypto import secure_compare
 from .helpers import configure_storage_from_oauth, setup_google_drive_oauth
 from .middleware import OAuthMiddleware
 from .models import (
@@ -40,6 +42,7 @@ from .models import (
     RegistrationError,
     TokenError,
 )
+from .redirect_uri import build_redirect_url, is_safe_redirect_uri
 from .token_store import TokenStore
 
 __all__ = [
@@ -55,4 +58,9 @@ __all__ = [
     "BaseTokenStore",
     "setup_google_drive_oauth",
     "configure_storage_from_oauth",
+    # Helpers for provider authors
+    "supports_keyword",
+    "secure_compare",
+    "is_safe_redirect_uri",
+    "build_redirect_url",
 ]
