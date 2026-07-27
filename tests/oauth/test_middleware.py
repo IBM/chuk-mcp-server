@@ -26,12 +26,18 @@ class MockOAuthProvider(BaseOAuthProvider):
     provider that accepts client_secret.
     """
 
-    def __init__(self):
+    def __init__(self, redirect_uri_registered=True):
         self.authorize_called = False
         self.exchange_code_called = False
         self.exchange_refresh_called = False
         self.validate_token_called = False
         self.register_client_called = False
+        self.redirect_uri_registered = redirect_uri_registered
+
+    async def validate_redirect_uri(self, client_id, redirect_uri):
+        # Treat the test client's redirect URI as registered so error-redirect
+        # behaviour can be exercised; flip the flag to test the refusal path.
+        return self.redirect_uri_registered
 
     async def authorize(self, params):
         self.authorize_called = True

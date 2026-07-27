@@ -54,6 +54,7 @@ from .constants import (
     TTL_PENDING_AUTH,
     TTL_REFRESH_TOKEN,
 )
+from .crypto import secure_compare
 from .token_models import (
     AccessTokenData,
     AuthorizationCodeData,
@@ -192,10 +193,10 @@ class TokenStore(BaseTokenStore):
 
                     verifier_hash = hashlib.sha256(code_verifier.encode()).digest()
                     verifier_challenge = base64.urlsafe_b64encode(verifier_hash).decode().rstrip("=")
-                    if not secrets.compare_digest(verifier_challenge, code_data.code_challenge):
+                    if not secure_compare(code_data.code_challenge, verifier_challenge):
                         return None
                 elif challenge_method == CODE_CHALLENGE_PLAIN:
-                    if not secrets.compare_digest(code_verifier, code_data.code_challenge):
+                    if not secure_compare(code_data.code_challenge, code_verifier):
                         return None
                 else:
                     return None
@@ -529,7 +530,7 @@ class TokenStore(BaseTokenStore):
 
         # Validate secret if provided
         if client_secret is not None:
-            if not secrets.compare_digest(client_data.client_secret, client_secret):
+            if not secure_compare(client_data.client_secret, client_secret):
                 return False
 
         # Validate redirect URI if provided
@@ -571,7 +572,7 @@ class TokenStore(BaseTokenStore):
             return False
 
         if client_secret is not None:
-            if not secrets.compare_digest(client_data.client_secret, client_secret):
+            if not secure_compare(client_data.client_secret, client_secret):
                 return False
 
         if redirect_uri is not None:

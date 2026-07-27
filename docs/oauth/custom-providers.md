@@ -305,9 +305,33 @@ must hold up its end of what the server's RFC 8414 metadata advertises:
 - **Never let a PKCE challenge go unverified.** If a code carries a
   `code_challenge`, the token exchange must verify it — RFC 7636 §4.3 says an
   absent `code_challenge_method` means `plain`, not "skip the check".
+- **Validate redirect URIs at registration.** Use
+  `chuk_mcp_server.oauth.redirect_uri.is_safe_redirect_uri()` to reject
+  `javascript:`, `data:` and relative URIs. Registration is open, and the
+  callback page renders the registered URI as a link.
+- **Report the real token lifetime.** `expires_in` must match the TTL your token
+  store applies, or clients will cache tokens past their expiry.
 
 Raise `TokenError(error="invalid_client", ...)` when authentication fails; the
 middleware turns that into a `401` with a `WWW-Authenticate: Basic` header.
+
+### `validate_redirect_uri`
+
+Before the authorization endpoint redirects an *error* back to a client, it asks
+your provider whether the redirect URI is actually registered — RFC 6749 §4.1.2.1
+forbids automatically navigating to an unvalidated URI. The default
+implementation on `BaseOAuthProvider` answers from `self.token_store`, so the
+documented provider pattern needs no extra work. Override it if you store
+clients elsewhere:
+
+```python
+    async def validate_redirect_uri(self, client_id: str, redirect_uri: str) -> bool:
+        client = await my_client_registry.get(client_id)
+        return bool(client and redirect_uri in client.redirect_uris)
+```
+
+Returning `False` is always safe: the error is rendered as a page instead of
+being redirected. A provider that cannot answer **must** return `False`.
 
 ## Service OAuth Client
 

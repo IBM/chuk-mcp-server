@@ -12,7 +12,7 @@ import base64
 import binascii
 from dataclasses import dataclass
 from enum import Enum
-from urllib.parse import unquote
+from urllib.parse import unquote_plus
 
 from .constants import (
     AUTH_SCHEME_BASIC,
@@ -83,7 +83,9 @@ def parse_basic_auth(header_value: str | None) -> tuple[str | None, str | None]:
     if not client_id:
         raise ValueError("Basic credentials missing client_id")
 
-    return unquote(client_id), unquote(client_secret)
+    # RFC 6749 2.3.1 applies application/x-www-form-urlencoded, which encodes
+    # space as "+" — so unquote_plus, not unquote.
+    return unquote_plus(client_id), unquote_plus(client_secret)
 
 
 def extract_client_credentials(

@@ -141,6 +141,40 @@ class BaseOAuthProvider(ABC):
         """
         pass
 
+    async def validate_redirect_uri(
+        self,
+        client_id: str,
+        redirect_uri: str,
+    ) -> bool:
+        """
+        Report whether redirect_uri is registered for client_id.
+
+        The authorization endpoint calls this *before* redirecting an error back
+        to the client. RFC 6749 section 4.1.2.1 forbids redirecting to an
+        unvalidated URI, so a provider that cannot answer must answer False and
+        the error is rendered as a page instead.
+
+        The default delegates to ``self.token_store.validate_client`` when the
+        provider has one, which covers the documented provider pattern. Override
+        it if your provider stores clients elsewhere.
+
+        Args:
+            client_id: Client ID from the authorization request
+            redirect_uri: Redirect URI from the authorization request
+
+        Returns:
+            True only if the pairing is known to be registered
+        """
+        token_store = getattr(self, "token_store", None)
+        if token_store is None:
+            return False
+
+        try:
+            return bool(await token_store.validate_client(client_id, redirect_uri=redirect_uri))
+        except Exception:
+            # An unanswerable check is a failed check.
+            return False
+
     async def revoke_token(
         self,
         token: str,

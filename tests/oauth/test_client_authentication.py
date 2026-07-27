@@ -30,6 +30,7 @@ from chuk_mcp_server.oauth.constants import (
     GRANT_AUTHORIZATION_CODE,
     GRANT_REFRESH_TOKEN,
     HTTP_BAD_REQUEST,
+    HTTP_INTERNAL_SERVER_ERROR,
     HTTP_UNAUTHORIZED,
 )
 from chuk_mcp_server.oauth.middleware import OAuthMiddleware
@@ -324,9 +325,13 @@ class TestPkceEnforcement:
 class RecordingProvider(BaseOAuthProvider):
     """Provider that records the credentials the middleware hands it."""
 
-    def __init__(self, expected_secret: str | None = None):
+    def __init__(self, expected_secret: str | None = None, redirect_uri_registered: bool = False):
         self.expected_secret = expected_secret
+        self.redirect_uri_registered = redirect_uri_registered
         self.received: dict[str, object] = {}
+
+    async def validate_redirect_uri(self, client_id, redirect_uri):
+        return self.redirect_uri_registered
 
     async def exchange_authorization_code(self, code, client_id, redirect_uri, code_verifier=None, client_secret=None):
         self.received = {
@@ -613,25 +618,29 @@ class TestAuthorizeEndpointPkceMethod:
             OAuthMiddleware._resolve_code_challenge_method("chal", "S512")
 
 
+def authorize_request(**overrides) -> Request:
+    """Build an authorization endpoint request."""
+    request = Mock(spec=Request)
+    request.query_params = {
+        "response_type": "code",
+        "client_id": "client-a",
+        "redirect_uri": REDIRECT_URI,
+        **overrides,
+    }
+    return request
+
+
 class TestAuthorizeEndpointRejectsBadPkce:
     """An unsupported PKCE method must not silently produce an unverifiable code."""
 
     @pytest.mark.asyncio
     async def test_unsupported_method_redirects_with_an_error(self):
-        provider = RecordingProvider()
+        provider = RecordingProvider(redirect_uri_registered=True)
         middleware = build_middleware(provider)
 
-        request = Mock(spec=Request)
-        request.query_params = {
-            "response_type": "code",
-            "client_id": "client-a",
-            "redirect_uri": REDIRECT_URI,
-            "code_challenge": "chal",
-            "code_challenge_method": "S512",
-            "state": "mcp-state",
-        }
-
-        response = await middleware._authorize_endpoint(request)
+        response = await middleware._authorize_endpoint(
+            authorize_request(code_challenge="chal", code_challenge_method="S512", state="mcp-state")
+        )
 
         assert response.status_code in (302, 307)
         assert response.headers["location"].startswith(REDIRECT_URI)
@@ -640,8 +649,7 @@ class TestAuthorizeEndpointRejectsBadPkce:
 
     @pytest.mark.asyncio
     async def test_error_page_when_no_redirect_uri(self):
-        provider = RecordingProvider()
-        middleware = build_middleware(provider)
+        middleware = build_middleware(RecordingProvider())
 
         request = Mock(spec=Request)
         request.query_params = {"response_type": "code", "client_id": "client-a"}
@@ -650,3 +658,117 @@ class TestAuthorizeEndpointRejectsBadPkce:
 
         assert response.status_code == HTTP_BAD_REQUEST
         assert b"Authorization Error" in response.body
+
+
+class TestAuthorizeErrorRedirectIsValidated:
+    """RFC 6749 4.1.2.1 — never auto-redirect an error to an unvalidated URI."""
+
+    @pytest.mark.asyncio
+    async def test_unregistered_redirect_uri_gets_an_error_page(self):
+        # The attacker's URI is not registered, so the error must not be sent there.
+        provider = RecordingProvider(redirect_uri_registered=False)
+        middleware = build_middleware(provider)
+
+        response = await middleware._authorize_endpoint(
+            authorize_request(
+                redirect_uri="http://evil.example/steal",
+                code_challenge_method="S512",
+                state="mcp-state",
+            )
+        )
+
+        assert response.status_code == HTTP_BAD_REQUEST
+        assert b"Authorization Error" in response.body
+        assert "location" not in response.headers
+
+    @pytest.mark.asyncio
+    async def test_registered_redirect_uri_still_receives_the_error(self):
+        provider = RecordingProvider(redirect_uri_registered=True)
+        middleware = build_middleware(provider)
+
+        response = await middleware._authorize_endpoint(
+            authorize_request(redirect_uri=REDIRECT_URI, code_challenge_method="S512", state="mcp-state")
+        )
+
+        assert response.status_code in (302, 307)
+        assert response.headers["location"].startswith(REDIRECT_URI)
+        assert "error=server_error" in response.headers["location"]
+
+    @pytest.mark.asyncio
+    async def test_missing_client_id_gets_an_error_page(self):
+        # Without a client_id there is nothing to validate the URI against.
+        provider = RecordingProvider(redirect_uri_registered=True)
+        middleware = build_middleware(provider)
+
+        request = Mock(spec=Request)
+        request.query_params = {"response_type": "code", "redirect_uri": "http://evil.example/steal"}
+
+        response = await middleware._authorize_endpoint(request)
+
+        assert response.status_code == HTTP_BAD_REQUEST
+        assert "location" not in response.headers
+
+    @pytest.mark.asyncio
+    async def test_a_raising_validator_refuses_the_redirect(self):
+        provider = RecordingProvider(redirect_uri_registered=True)
+        provider.validate_redirect_uri = AsyncMock(side_effect=RuntimeError("store down"))
+        middleware = build_middleware(provider)
+
+        response = await middleware._authorize_endpoint(authorize_request(code_challenge_method="S512"))
+
+        assert response.status_code == HTTP_BAD_REQUEST
+        assert "location" not in response.headers
+
+
+class TestExternalCallbackLinkSafety:
+    """The callback page renders the redirect URI as a link, so re-check it."""
+
+    def _middleware_with_callback(self, redirect_uri):
+        provider = RecordingProvider()
+        provider.handle_external_callback = AsyncMock(
+            return_value={"code": "the-code", "state": "mcp-state", "redirect_uri": redirect_uri}
+        )
+        return build_middleware(provider)
+
+    def _callback_request(self):
+        request = Mock(spec=Request)
+        request.query_params = {"code": "google-code", "state": "google-state"}
+        return request
+
+    @pytest.mark.asyncio
+    async def test_safe_redirect_uri_renders_the_page(self):
+        middleware = self._middleware_with_callback(REDIRECT_URI)
+
+        response = await middleware._external_callback_endpoint(self._callback_request())
+
+        assert response.status_code == 200
+        assert b"Authorization Successful" in response.body
+
+    @pytest.mark.asyncio
+    async def test_javascript_uri_is_refused(self):
+        # Defence in depth: registration rejects these, but a client stored before
+        # that check existed must not get a javascript: link rendered for it.
+        middleware = self._middleware_with_callback("javascript:alert(document.cookie)")
+
+        response = await middleware._external_callback_endpoint(self._callback_request())
+
+        assert response.status_code == HTTP_INTERNAL_SERVER_ERROR
+        assert b"javascript:" not in response.body
+        assert b"Authorization Error" in response.body
+
+    @pytest.mark.asyncio
+    async def test_data_uri_is_refused(self):
+        middleware = self._middleware_with_callback("data:text/html,<script>alert(1)</script>")
+
+        response = await middleware._external_callback_endpoint(self._callback_request())
+
+        assert response.status_code == HTTP_INTERNAL_SERVER_ERROR
+        assert b"script" not in response.body
+
+    @pytest.mark.asyncio
+    async def test_code_is_appended_to_an_existing_query_string(self):
+        middleware = self._middleware_with_callback("https://app.example/cb?tenant=acme")
+
+        response = await middleware._external_callback_endpoint(self._callback_request())
+
+        assert b"tenant=acme&amp;code=the-code" in response.body

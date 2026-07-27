@@ -48,6 +48,7 @@ from ..models import (
     RegistrationError,
     TokenError,
 )
+from ..redirect_uri import is_safe_redirect_uri
 from ..token_store import TokenStore
 
 logger = logging.getLogger(__name__)
@@ -308,6 +309,16 @@ class GoogleDriveOAuthProvider(BaseOAuthProvider):
             "requires_external_authorization": True,
         }
 
+    def _access_token_lifetime(self) -> int:
+        """How long an issued access token actually lives, in seconds.
+
+        Reported to the client as expires_in, so it must match the TTL the token
+        store applies — otherwise clients cache a token past its expiry and see
+        spurious 401s.
+        """
+        lifetime = getattr(self.token_store, "access_token_ttl", None)
+        return int(lifetime) if lifetime else DEFAULT_TOKEN_EXPIRY
+
     async def _authenticate_client(self, client_id: str, client_secret: str | None) -> None:
         """Authenticate a client at the token endpoint.
 
@@ -352,7 +363,7 @@ class GoogleDriveOAuthProvider(BaseOAuthProvider):
             OAuth token with access_token and refresh_token
         """
         logger.info("🔄 Exchanging authorization code for access token")
-        logger.debug(f"Authorization code (redacted): {code[:8]}...")
+        logger.debug("Authorization code received (value not logged)")
 
         # Authenticate the client before honouring the code (RFC 6749 3.2.1)
         await self._authenticate_client(client_id, client_secret)
@@ -382,12 +393,13 @@ class GoogleDriveOAuthProvider(BaseOAuthProvider):
             scope=code_data["scope"],
         )
 
-        logger.info(f"✓ Created access token successfully (expires in {DEFAULT_TOKEN_EXPIRY}s)")
+        expires_in = self._access_token_lifetime()
+        logger.info(f"✓ Created access token successfully (expires in {expires_in}s)")
 
         return OAuthToken(
             access_token=access_token,
             token_type="Bearer",
-            expires_in=DEFAULT_TOKEN_EXPIRY,
+            expires_in=expires_in,
             refresh_token=refresh_token,
             scope=code_data["scope"],
         )
@@ -438,7 +450,7 @@ class GoogleDriveOAuthProvider(BaseOAuthProvider):
         return OAuthToken(
             access_token=new_access_token,
             token_type="Bearer",
-            expires_in=DEFAULT_TOKEN_EXPIRY,
+            expires_in=self._access_token_lifetime(),
             refresh_token=new_refresh_token,
             scope=scope,
         )
@@ -458,7 +470,7 @@ class GoogleDriveOAuthProvider(BaseOAuthProvider):
             Token data with user_id and Google Drive token
         """
         logger.info("🔍 Validating access token")
-        logger.debug(f"Access token (redacted): {token[:8]}...")
+        logger.debug("Access token received (value not logged)")
 
         # Validate MCP token
         token_data = await self.token_store.validate_access_token(token)
@@ -536,6 +548,15 @@ class GoogleDriveOAuthProvider(BaseOAuthProvider):
                 error=ERROR_INVALID_REDIRECT_URI,
                 error_description="At least one redirect URI required",
             )
+
+        # Registration is open, so a client could otherwise register a
+        # javascript: or data: URI that the callback page later renders as a link.
+        for uri in redirect_uris:
+            if not isinstance(uri, str) or not is_safe_redirect_uri(uri):
+                raise RegistrationError(
+                    error=ERROR_INVALID_REDIRECT_URI,
+                    error_description="Redirect URIs must be absolute URIs with a navigable scheme",
+                )
 
         # RFC 7591: honour the client's declared token endpoint auth method rather
         # than discarding it. Undeclared clients register as public.

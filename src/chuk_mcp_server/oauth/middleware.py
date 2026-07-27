@@ -15,7 +15,6 @@ Works with any OAuth provider that implements BaseOAuthProvider.
 import html
 import logging
 from typing import Any, Literal, cast
-from urllib.parse import urlencode
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -72,6 +71,7 @@ from .constants import (
     RESPONSE_TYPE_CODE,
 )
 from .models import AuthorizationParams, RegistrationError, TokenError
+from .redirect_uri import build_redirect_url, is_safe_redirect_uri
 
 logger = logging.getLogger(__name__)
 
@@ -281,14 +281,17 @@ class OAuthMiddleware:
             if result.get(PARAM_STATE):
                 redirect_params[PARAM_STATE] = result[PARAM_STATE]
 
-            redirect_url = f"{auth_params.redirect_uri}?{urlencode(redirect_params)}"
-            return RedirectResponse(redirect_url)
+            return RedirectResponse(build_redirect_url(auth_params.redirect_uri, redirect_params))
 
         except Exception:
-            # Attempt to redirect with error, but only if redirect_uri is available
+            # Redirect the error back to the client, but ONLY once the redirect URI
+            # is confirmed to be registered for this client. RFC 6749 4.1.2.1: an
+            # unvalidated redirect URI must never be automatically navigated to.
             try:
+                client_id = params.get(PARAM_CLIENT_ID)
                 redirect_uri = params.get(PARAM_REDIRECT_URI)
-                if redirect_uri:
+
+                if client_id and redirect_uri and await self.provider.validate_redirect_uri(client_id, redirect_uri):
                     error_params = {
                         PARAM_ERROR: ERROR_SERVER_ERROR,
                         PARAM_ERROR_DESCRIPTION: "Authorization failed",
@@ -296,8 +299,9 @@ class OAuthMiddleware:
                     if params.get(PARAM_STATE):
                         error_params[PARAM_STATE] = params[PARAM_STATE]
 
-                    error_url = f"{redirect_uri}?{urlencode(error_params)}"
-                    return RedirectResponse(error_url)
+                    return RedirectResponse(build_redirect_url(redirect_uri, error_params))
+
+                logger.warning("Refusing to redirect an authorization error to an unregistered redirect_uri")
             except Exception:
                 logger.debug("Failed to redirect with error response", exc_info=True)
 
@@ -335,8 +339,7 @@ class OAuthMiddleware:
 
             logger.debug(f"🔐 Token exchange request - grant_type: {grant_type}")
             logger.debug(f"🔐 Token exchange - client_id: {get_form_str(PARAM_CLIENT_ID)}")
-            code_val = get_form_str(PARAM_CODE)
-            logger.debug(f"🔐 Token exchange - code: {code_val[:20]}..." if code_val else "no code")
+            logger.debug(f"🔐 Token exchange - code present: {bool(get_form_str(PARAM_CODE))}")
             logger.debug(f"🔐 Token exchange - redirect_uri: {get_form_str(PARAM_REDIRECT_URI)}")
             logger.debug(f"🔐 Token exchange - code_verifier present: {bool(get_form_str(PARAM_CODE_VERIFIER))}")
 
@@ -609,7 +612,13 @@ class OAuthMiddleware:
             if result.get(PARAM_STATE):
                 redirect_params[PARAM_STATE] = result[PARAM_STATE]
 
-            redirect_url = f"{result['redirect_uri']}?{urlencode(redirect_params)}"
+            redirect_url = build_redirect_url(result["redirect_uri"], redirect_params)
+
+            # The URI came from a registered client, but the callback page turns it
+            # into a link — so re-check the scheme before rendering it as one.
+            if not is_safe_redirect_uri(redirect_url):
+                logger.error("Refusing to render a callback link for an unsafe redirect_uri")
+                raise ValueError("Unsafe redirect URI")
 
             # Return success page with auto-redirect
             escaped_redirect = html.escape(redirect_url)

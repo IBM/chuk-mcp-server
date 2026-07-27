@@ -95,6 +95,26 @@ BASIC_CREDENTIALS_SEPARATOR = ":"
 
 
 # ---------------------------------------------------------------------------
+# Redirect URI handling
+# ---------------------------------------------------------------------------
+QUERY_START = "?"
+QUERY_SEPARATOR = "&"
+
+# Schemes a browser executes rather than navigates to. A client must not be able
+# to register one, because the callback page renders the redirect URI as a link.
+DANGEROUS_URI_SCHEMES = frozenset(
+    {
+        "javascript",
+        "data",
+        "vbscript",
+        "file",
+        "blob",
+        "about",
+    }
+)
+
+
+# ---------------------------------------------------------------------------
 # HTTP status codes used by the OAuth endpoints
 # ---------------------------------------------------------------------------
 HTTP_OK = 200

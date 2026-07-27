@@ -558,3 +558,112 @@ class TestProviderConstruction:
         assert isinstance(instance.token_store, TokenStore)
         assert instance.token_store.sandbox_id == "custom-sandbox"
         assert instance._pending_authorizations == {}
+
+
+class TestRedirectUriRegistrationHardening:
+    """Registration must not accept a URI the callback page would render as a link."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "uri",
+        [
+            "javascript:alert(document.cookie)",
+            "data:text/html,<script>alert(1)</script>",
+            "vbscript:msgbox(1)",
+            "file:///etc/passwd",
+            "/relative/callback",
+            "   ",
+        ],
+    )
+    async def test_dangerous_redirect_uris_are_rejected(self, provider, uri):
+        with pytest.raises(RegistrationError) as exc:
+            await provider.register_client({"client_name": "App", "redirect_uris": [uri]})
+
+        assert exc.value.error == ERROR_INVALID_REDIRECT_URI
+
+    @pytest.mark.asyncio
+    async def test_one_bad_uri_rejects_the_whole_registration(self, provider, store):
+        with pytest.raises(RegistrationError):
+            await provider.register_client(
+                {"client_name": "App", "redirect_uris": [REDIRECT_URI, "javascript:alert(1)"]}
+            )
+
+        assert store.registered == []
+
+    @pytest.mark.asyncio
+    async def test_non_string_redirect_uri_is_rejected(self, provider):
+        with pytest.raises(RegistrationError) as exc:
+            await provider.register_client({"client_name": "App", "redirect_uris": [{"not": "a string"}]})
+
+        assert exc.value.error == ERROR_INVALID_REDIRECT_URI
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "uri",
+        ["https://app.example/callback", "http://localhost:9999/callback", "com.example.app:/cb"],
+    )
+    async def test_navigable_uris_are_accepted(self, provider, uri):
+        info = await provider.register_client({"client_name": "App", "redirect_uris": [uri]})
+
+        assert info.redirect_uris == [uri]
+
+
+class TestAccessTokenLifetime:
+    """expires_in must match the TTL the token store actually applies."""
+
+    @pytest.mark.asyncio
+    async def test_reports_the_stores_ttl(self, provider, store):
+        store.access_token_ttl = 900
+        store.validate_code_result = {"user_id": USER_ID, "scope": None}
+
+        token = await provider.exchange_authorization_code(
+            code="the-code", client_id=CLIENT_ID, redirect_uri=REDIRECT_URI
+        )
+
+        assert token.expires_in == 900
+
+    @pytest.mark.asyncio
+    async def test_refresh_reports_the_stores_ttl(self, provider, store):
+        store.access_token_ttl = 900
+
+        token = await provider.exchange_refresh_token(refresh_token="the-token", client_id=CLIENT_ID)
+
+        assert token.expires_in == 900
+
+    @pytest.mark.asyncio
+    async def test_falls_back_when_the_store_has_no_ttl(self, provider, store):
+        store.validate_code_result = {"user_id": USER_ID, "scope": None}
+
+        token = await provider.exchange_authorization_code(
+            code="the-code", client_id=CLIENT_ID, redirect_uri=REDIRECT_URI
+        )
+
+        assert token.expires_in == 3600
+
+
+class TestValidateRedirectUriHook:
+    """The default hook answers from the token store, and fails closed."""
+
+    @pytest.mark.asyncio
+    async def test_registered_pairing_is_accepted(self, provider, store):
+        store.authenticate_result = True
+
+        assert await provider.validate_redirect_uri(CLIENT_ID, REDIRECT_URI)
+
+    @pytest.mark.asyncio
+    async def test_unregistered_pairing_is_rejected(self, provider, store):
+        store.authenticate_result = False
+
+        assert not await provider.validate_redirect_uri(CLIENT_ID, "http://evil.example/cb")
+
+    @pytest.mark.asyncio
+    async def test_a_raising_store_fails_closed(self, provider):
+        provider.token_store.validate_client = AsyncMock(side_effect=RuntimeError("store down"))
+
+        assert not await provider.validate_redirect_uri(CLIENT_ID, REDIRECT_URI)
+
+    @pytest.mark.asyncio
+    async def test_a_provider_without_a_token_store_fails_closed(self, provider):
+        del provider.token_store
+
+        assert not await provider.validate_redirect_uri(CLIENT_ID, REDIRECT_URI)
