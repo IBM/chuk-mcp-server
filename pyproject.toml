@@ -4,13 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chuk-mcp-server"
-version = "0.26.0"
+version = "0.26.1"
 description = "A developer-friendly MCP framework powered by chuk_mcp"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.11"
 dependencies = [
-    "chuk-mcp>=0.9.2",
+    # Cap below 0.10: the 0.10 line is the Rust-backed chuk-mcp that depends on
+    # chuk-mcp-rs, which is not published yet. Lift once chuk-mcp-rs is on PyPI.
+    "chuk-mcp>=0.9.2,<0.10",
     "chuk-sessions>=0.6.1",
     "chuk-tool-processor>=0.22.1", # Required for MCP proxy/tool handling
     "httptools>=0.6.4",
